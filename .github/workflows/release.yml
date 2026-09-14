@@ -23,7 +23,7 @@ jobs:
           pacman -S --noconfirm git cmake ninja obs-studio qt6-base qt6-websockets libwebp zip
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate tag matches VERSION
         shell: bash
