@@ -3,47 +3,42 @@
 #include <QColor>
 #include <QImage>
 #include <QString>
-#include <QVector>
+#include <QUrl>
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
-struct PendingChatMessage {
-    QString userName;
-    QString text;
-    QColor userColor{0x91, 0xC8, 0xFF};
-    QImage rasterized; // prepared at the final font size on the Qt/network thread
-    int fontPx = 0;
-    float speed = 500.0f;
-};
-
-struct DecodedGif {
+struct DecodedImage {
     std::vector<QImage> frames;
     std::vector<int> delaysMs;
 };
 
-struct RenderMessage {
-    QImage image;
-    void *texture = nullptr; // gs_texture_t*, kept opaque in this header
-    float x = 0.0f;
-    float y = 0.0f;
-    float speed = 500.0f;
-    float width = 0.0f;
-    float height = 0.0f;
+using ImageAsset = std::shared_ptr<const DecodedImage>;
+using DecodedGif = DecodedImage;
+
+struct ChatFragment {
+    enum class Type { Text, Emote };
+    Type type = Type::Text;
+    QString text;
+    QString emoteId;
+    QUrl imageUrl;
+    QUrl fallbackUrl;
+    bool zeroWidth = false;
+    ImageAsset image;
+
+    ChatFragment() = default;
+    ChatFragment(Type kind, QString value) : type(kind), text(std::move(value)) {}
 };
 
-struct RenderGif {
-    DecodedGif decoded;
-    void *texture = nullptr; // gs_texture_t*
-    float x = 0.0f;
-    float y = 0.0f;
-    float vx = 150.0f;
-    float vy = 110.0f;
-    float width = 180.0f;
-    float height = 180.0f;
-    int currentFrame = 0;
-    int accumulatedMs = 0;
-    bool textureDirty = true;
-    float ageSeconds = 0.0f;
-    float lifetimeSeconds = 12.0f;
+// Normalized data only. Layout, movement and GPU state belong to the renderer.
+struct ChatMessage {
+    QString userName;
+    QString text;
+    QColor userColor{0x91, 0xC8, 0xFF};
+    std::vector<ChatFragment> fragments;
+
+    ChatMessage() = default;
+    ChatMessage(QString name, QString value, QColor color = QColor(0x91, 0xC8, 0xFF))
+        : userName(std::move(name)), text(std::move(value)), userColor(std::move(color)) {}
 };

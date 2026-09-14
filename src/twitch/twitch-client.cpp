@@ -1,8 +1,6 @@
 #include "twitch/twitch-client.hpp"
 
-#include <QBuffer>
 #include <QDesktopServices>
-#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QNetworkRequest>
@@ -32,7 +30,8 @@ TwitchClient::TwitchClient(MessageCallback onMessage, GifCallback onGif, StatusC
     : onMessage_(std::move(onMessage)),
       onGif_(std::move(onGif)),
       onStatus_(std::move(onStatus)),
-      onTokens_(std::move(onTokens))
+      onTokens_(std::move(onTokens)),
+      emotes_([this](ChatMessage message) { if (onMessage_) onMessage_(std::move(message)); })
 {
     devicePollTimer_.setSingleShot(false);
     QObject::connect(&devicePollTimer_, &QTimer::timeout, [&]() { pollDeviceToken(); });
@@ -55,8 +54,13 @@ TwitchClient::~TwitchClient()
 
 void TwitchClient::configure(QString clientId, QString channel, QString accessToken, QString refreshToken)
 {
+    channel = channel.trimmed();
+    if (channel.isEmpty())
+        channel = userLogin_;
+    if (clientId_ != clientId || channelLogin_.compare(channel, Qt::CaseInsensitive) != 0)
+        emotes_.clear();
     clientId_ = std::move(clientId);
-    channelLogin_ = std::move(channel).trimmed();
+    channelLogin_ = std::move(channel);
     accessToken_ = std::move(accessToken);
     refreshToken_ = std::move(refreshToken);
 }
@@ -288,6 +292,7 @@ void TwitchClient::resolveBroadcaster()
             return;
         }
         broadcasterId_ = data.first().toObject().value(QStringLiteral("id")).toString();
+        emotes_.setChannel(broadcasterId_);
         connectEventSub();
     });
 }
@@ -330,14 +335,9 @@ void TwitchClient::handleEventSubMessage(const QString &payload)
     const auto event = data.value(QStringLiteral("event")).toObject();
     const auto message = event.value(QStringLiteral("message")).toObject();
 
-    PendingChatMessage pending;
-    pending.userName = event.value(QStringLiteral("chatter_user_name")).toString();
-    pending.text = message.value(QStringLiteral("text")).toString();
-    const QString color = event.value(QStringLiteral("color")).toString();
-    if (QColor(color).isValid())
-        pending.userColor = QColor(color);
-    if (onMessage_)
-        onMessage_(std::move(pending));
+    // Use the currently subscribed broadcaster until a requested channel change reconnects.
+    emotes_.setChannel(broadcasterId_);
+    emotes_.resolve(parseTwitchMessage(event));
 
     const auto fragments = message.value(QStringLiteral("fragments")).toArray();
     for (const auto &value : fragments) {
@@ -381,42 +381,15 @@ void TwitchClient::subscribeChat(const QString &sessionId)
 
 void TwitchClient::downloadGif(const QUrl &url)
 {
-    auto *reply = network_.get(QNetworkRequest(url));
-    QObject::connect(reply, &QNetworkReply::finished, [this, reply]() {
-        const QByteArray bytes = reply->readAll();
-        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        reply->deleteLater();
-        if (status < 200 || status >= 300 || bytes.isEmpty())
-            return;
-        DecodedGif gif = decodeGif(bytes);
-        if (!gif.frames.empty() && onGif_)
-            onGif_(std::move(gif));
+    emotes_.loadImage(url, [this](ImageAsset image) {
+        if (image && onGif_)
+            onGif_(*image);
     });
-}
-
-DecodedGif TwitchClient::decodeGif(const QByteArray &bytes)
-{
-    DecodedGif out;
-    QBuffer buffer;
-    buffer.setData(bytes);
-    buffer.open(QIODevice::ReadOnly);
-    QImageReader reader(&buffer);
-    reader.setAutoTransform(true);
-
-    constexpr int kMaxFrames = 180;
-    while (reader.canRead() && static_cast<int>(out.frames.size()) < kMaxFrames) {
-        QImage frame = reader.read();
-        if (frame.isNull())
-            break;
-        frame = frame.convertToFormat(QImage::Format_RGBA8888);
-        out.frames.push_back(std::move(frame));
-        out.delaysMs.push_back(qMax(16, reader.nextImageDelay()));
-    }
-    return out;
 }
 
 void TwitchClient::disconnect()
 {
+    emotes_.clear();
     devicePollTimer_.stop();
     if (socket_.state() != QAbstractSocket::UnconnectedState)
         socket_.close();

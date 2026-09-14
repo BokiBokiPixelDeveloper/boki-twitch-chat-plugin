@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chat/chat-types.hpp"
+#include "chat/emote-service.hpp"
 
 #include <QJsonObject>
 #include <QNetworkAccessManager>
@@ -14,7 +15,7 @@
 
 class TwitchClient {
 public:
-    using MessageCallback = std::function<void(PendingChatMessage)>;
+    using MessageCallback = std::function<void(ChatMessage)>;
     using GifCallback = std::function<void(DecodedGif)>;
     using StatusCallback = std::function<void(QString)>;
     using TokenCallback = std::function<void(QString accessToken, QString refreshToken)>;
@@ -47,7 +48,6 @@ private:
 
     QNetworkRequest apiRequest(const QUrl &url) const;
     static QByteArray encodeForm(const QList<QPair<QString, QString>> &pairs);
-    static DecodedGif decodeGif(const QByteArray &bytes);
 
     QNetworkAccessManager network_;
     QWebSocket socket_;
@@ -68,6 +68,8 @@ private:
     QString deviceCode_;
     QString deviceScopes_;
     int devicePollIntervalMs_ = 5000;
+
+    EmoteService emotes_;
 
     QString statusText_{QStringLiteral("Nicht verbunden")};
 };

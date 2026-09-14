@@ -1,6 +1,7 @@
 #include "renderer/chat-source.hpp"
 
 #include <obs-module.h>
+#include <QFontDatabase>
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_AUTHOR("OpenAI / Boki")
@@ -77,9 +78,13 @@ static void sourceDefaults(obs_data_t *settings)
 }
 
 static obs_source_info sourceInfo = {};
+static int emojiFontId = -1;
 
 bool obs_module_load(void)
 {
+    emojiFontId = QFontDatabase::addApplicationFont(QStringLiteral(":/bokis-twitch-chat-plugin/fonts/NotoColorEmoji.ttf"));
+    if (emojiFontId < 0)
+        blog(LOG_WARNING, "[bokis-twitch-chat-plugin] Could not load bundled emoji font");
     sourceInfo.id = "bokis_twitch_chat_plugin";
     sourceInfo.type = OBS_SOURCE_TYPE_INPUT;
     sourceInfo.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_SRGB;
@@ -96,4 +101,11 @@ bool obs_module_load(void)
     obs_register_source(&sourceInfo);
     blog(LOG_INFO, "[bokis-twitch-chat-plugin] Native plugin %s loaded", BOKIS_TWITCH_CHAT_VERSION);
     return true;
+}
+
+void obs_module_unload(void)
+{
+    if (emojiFontId >= 0)
+        QFontDatabase::removeApplicationFont(emojiFontId);
+    emojiFontId = -1;
 }

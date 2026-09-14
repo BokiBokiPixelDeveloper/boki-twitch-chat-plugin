@@ -1,11 +1,9 @@
 #include "renderer/chat-source.hpp"
 
 #include <QFont>
-#include <QFontMetrics>
 #include <QFontDatabase>
 #include <QMutexLocker>
 #include <QPainter>
-#include <QPainterPath>
 #include <QTimer>
 
 #include <graphics/graphics.h>
@@ -66,17 +64,12 @@ bool buttonInstallUpdate(obs_properties_t *, obs_property_t *, void *data)
     static_cast<ChatSource *>(data)->installUpdate();
     return true;
 }
-
-QColor safeColor(const QColor &c)
-{
-    return c.isValid() ? c : QColor(0x91, 0xC8, 0xFF);
-}
 } // namespace
 
 ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source) : source_(source)
 {
     twitch_ = std::make_unique<TwitchClient>(
-        [this](PendingChatMessage msg) { enqueueMessage(std::move(msg)); },
+        [this](ChatMessage msg) { enqueueMessage(std::move(msg)); },
         [this](DecodedGif gif) { enqueueGif(std::move(gif)); },
         [this](QString state) { status_ = std::move(state); },
         [this](QString access, QString refresh) { persistTokens(access, refresh); });
@@ -100,9 +93,15 @@ ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source) : source_(sou
 ChatSource::~ChatSource()
 {
     twitch_->disconnect();
+    twitch_.reset();
     obs_enter_graphics();
-    for (auto &m : messages_)
+    for (auto &m : messages_) {
         destroyTexture(m.texture);
+        for (auto &emote : m.emotes)
+            destroyTexture(emote.texture);
+    }
+    for (auto &texture : deferredDestroy_)
+        destroyTexture(texture);
     for (auto &g : gifs_)
         destroyTexture(g.texture);
     obs_leave_graphics();
@@ -148,7 +147,7 @@ void ChatSource::update(obs_data_t *settings)
     twitch_->configure(clientId_, channel_, accessToken_, refreshToken_);
 }
 
-void ChatSource::enqueueMessage(PendingChatMessage message)
+void ChatSource::enqueueMessage(ChatMessage message)
 {
     // Rasterize at the FINAL font size before the OBS video thread sees the message.
     // alpha2 rendered everything at maxFontPx_ and scaled the texture down, which made
@@ -162,17 +161,22 @@ void ChatSource::enqueueMessage(PendingChatMessage message)
     const float pressure = std::clamp((static_cast<float>(activeMessageCount_.load()) + pendingCount) / 18.0f, 0.0f, 1.0f);
     const float lengthPressure = std::clamp((message.text.size() - 70.0f) / 180.0f, 0.0f, 1.0f);
     const float density = std::max(pressure, lengthPressure * 0.85f);
-    message.fontPx = static_cast<int>(std::round(maxFontPx_ - density * (maxFontPx_ - minFontPx_)));
-    message.speed = minSpeed_ + std::max(pressure, lengthPressure) * (maxSpeed_ - minSpeed_);
-    message.rasterized = rasterizeMessage(message, message.fontPx);
+    const int fontPx = static_cast<int>(std::round(maxFontPx_ - density * (maxFontPx_ - minFontPx_)));
+    PreparedMessage prepared;
+    prepared.speed = minSpeed_ + std::max(pressure, lengthPressure) * (maxSpeed_ - minSpeed_);
+    prepared.layout = layoutMessage(message, fontFamily_, fontWeight_, fontPx, outlineWidthPx_);
 
     QMutexLocker lock(&pendingMutex_);
-    pendingMessages_.push_back(std::move(message));
+    if (pendingMessages_.size() >= 128)
+        pendingMessages_.pop_front();
+    pendingMessages_.push_back(std::move(prepared));
 }
 
 void ChatSource::enqueueGif(DecodedGif gif)
 {
     QMutexLocker lock(&pendingMutex_);
+    if (pendingGifs_.size() >= 30)
+        pendingGifs_.pop_front();
     pendingGifs_.push_back(std::move(gif));
 }
 
@@ -209,10 +213,35 @@ void ChatSource::installUpdate()
 
 void ChatSource::addTestMessage()
 {
-    blog(LOG_INFO, "[bokis-twitch-chat-plugin] Native test message requested");
-    enqueueMessage(PendingChatMessage{QStringLiteral("Boki"),
-                                      QStringLiteral("Native OBS rendering – no CEF, 1000 px/s works 👀"),
-                                      QColor(QStringLiteral("#b68cff"))});
+    ChatMessage message{QStringLiteral("Boki"), QStringLiteral("Emojis: 👀 ❤️ 👍🏽 👨‍👩‍👧‍👦 🇩🇪  Emotes: Static Animated"),
+                        QColor(QStringLiteral("#b68cff"))};
+    auto animation = std::make_shared<DecodedImage>();
+    for (int i = 0; i < 12; ++i) {
+        QImage image(64, 64, QImage::Format_RGBA8888);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setBrush(QColor::fromHsv(i * 30, 190, 255));
+        painter.setPen(Qt::NoPen);
+        painter.drawEllipse(QRectF(3, 3, 58, 58));
+        painter.setPen(QPen(Qt::black, 4));
+        painter.drawPoint(22, 25);
+        painter.drawPoint(42, 25);
+        painter.drawArc(QRectF(20, 30, 24, 18), 180 * 16, 180 * 16);
+        painter.end();
+        animation->frames.push_back(std::move(image));
+        animation->delaysMs.push_back(i % 2 ? 120 : 60);
+    }
+    auto still = std::make_shared<DecodedImage>();
+    still->frames.push_back(animation->frames.front());
+    still->delaysMs.push_back(100);
+    ChatFragment staticEmote{ChatFragment::Type::Emote, QStringLiteral("Static")};
+    staticEmote.image = still;
+    ChatFragment animatedEmote{ChatFragment::Type::Emote, QStringLiteral("Animated")};
+    animatedEmote.image = animation;
+    message.fragments = {{ChatFragment::Type::Text, QStringLiteral("Emojis: 👀 ❤️ 👍🏽 👨‍👩‍👧‍👦 🇩🇪  Emotes: ")},
+        std::move(staticEmote), {ChatFragment::Type::Text, QStringLiteral(" ")}, std::move(animatedEmote)};
+    enqueueMessage(std::move(message));
 }
 
 void ChatSource::addTestGif()
@@ -248,56 +277,6 @@ void ChatSource::addTestGif()
 QString ChatSource::status() const
 {
     return status_;
-}
-
-QImage ChatSource::rasterizeMessage(const PendingChatMessage &msg, int fontPx) const
-{
-    QFont font;
-    if (!fontFamily_.isEmpty())
-        font.setFamily(fontFamily_);
-    font.setPixelSize(fontPx);
-    font.setWeight(static_cast<QFont::Weight>(fontWeight_));
-    font.setStyleStrategy(QFont::PreferAntialias);
-    font.setHintingPreference(QFont::PreferFullHinting);
-    QFont bold = font;
-    bold.setWeight(static_cast<QFont::Weight>(std::max(fontWeight_, 600)));
-
-    const QString prefix = msg.userName + QStringLiteral(": ");
-    const QFontMetrics nameMetrics(bold);
-    const QFontMetrics textMetrics(font);
-    const int nameW = nameMetrics.horizontalAdvance(prefix);
-    const int textW = textMetrics.horizontalAdvance(msg.text);
-    const int pad = std::max(6, fontPx / 5);
-    const int width = std::max(1, nameW + textW + pad * 2 + 4);
-    const int height = std::max(nameMetrics.height(), textMetrics.height()) + pad * 2 + 4;
-
-    QImage image(width, height, QImage::Format_RGBA8888);
-    image.fill(Qt::transparent);
-    QPainter painter(&image);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setRenderHint(QPainter::TextAntialiasing, true);
-
-    const qreal baseline = pad + nameMetrics.ascent() + 2;
-    QPainterPath namePath;
-    namePath.addText(pad, baseline, bold, prefix);
-    QPainterPath textPath;
-    textPath.addText(pad + nameW, baseline, font, msg.text);
-
-    QPen outline(QColor(0, 0, 0, 220));
-    outline.setWidthF(outlineWidthPx_);
-    outline.setJoinStyle(Qt::RoundJoin);
-    painter.setPen(outline);
-    painter.setBrush(Qt::NoBrush);
-    painter.drawPath(namePath);
-    painter.drawPath(textPath);
-
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(safeColor(msg.userColor));
-    painter.drawPath(namePath);
-    painter.setBrush(Qt::white);
-    painter.drawPath(textPath);
-    painter.end();
-    return image;
 }
 
 float ChatSource::collisionScore(float x, float y, float w, float h, float speed) const
@@ -357,7 +336,7 @@ float ChatSource::chooseY(float messageHeight, float messageWidth, float speed)
 
 void ChatSource::consumePending()
 {
-    std::deque<PendingChatMessage> newMessages;
+    std::deque<PreparedMessage> newMessages;
     std::deque<DecodedGif> newGifs;
     {
         QMutexLocker lock(&pendingMutex_);
@@ -366,19 +345,17 @@ void ChatSource::consumePending()
     }
 
     while (!newMessages.empty() && static_cast<int>(messages_.size()) < maxMessages_) {
-        PendingChatMessage pending = std::move(newMessages.front());
+        PreparedMessage pending = std::move(newMessages.front());
         newMessages.pop_front();
 
-        if (pending.rasterized.isNull()) {
-            if (pending.fontPx <= 0)
-                pending.fontPx = maxFontPx_;
-            pending.rasterized = rasterizeMessage(pending, pending.fontPx);
-        }
-
+        if (pending.layout.text.isNull())
+            continue;
         RenderMessage msg;
-        msg.width = static_cast<float>(pending.rasterized.width());
-        msg.height = static_cast<float>(pending.rasterized.height());
-        msg.image = std::move(pending.rasterized);
+        msg.width = static_cast<float>(pending.layout.text.width());
+        msg.height = static_cast<float>(pending.layout.text.height());
+        msg.image = std::move(pending.layout.text);
+        for (auto &emote : pending.layout.emotes)
+            msg.emotes.push_back({std::move(emote)});
         msg.speed = pending.speed;
         msg.x = static_cast<float>(canvasWidth_) + 25.0f;
         msg.y = chooseY(msg.height, msg.width, msg.speed);
@@ -434,8 +411,11 @@ void ChatSource::tick(float seconds)
     // Native OBS timing: no browser clock and no catch-up clamp. Speed remains true px/s.
     const float dt = std::clamp(seconds, 0.0f, 0.10f);
 
-    for (auto &m : messages_)
+    for (auto &m : messages_) {
         m.x -= m.speed * dt;
+        for (auto &emote : m.emotes)
+            emote.textureDirty |= advanceAnimation(*emote.layout.image, emote.currentFrame, emote.accumulatedMs, seconds * 1000.0);
+    }
 
     for (auto &g : gifs_) {
         g.ageSeconds += dt;
@@ -446,15 +426,7 @@ void ChatSource::tick(float seconds)
         if (g.x + g.width >= canvasWidth_) { g.x = canvasWidth_ - g.width; g.vx = -std::abs(g.vx); }
         if (g.y + g.height >= canvasHeight_) { g.y = canvasHeight_ - g.height; g.vy = -std::abs(g.vy); }
 
-        if (g.decoded.frames.size() > 1) {
-            g.accumulatedMs += static_cast<int>(std::round(dt * 1000.0f));
-            const int delay = g.decoded.delaysMs.empty() ? 100 : g.decoded.delaysMs[static_cast<size_t>(g.currentFrame)];
-            while (g.accumulatedMs >= delay) {
-                g.accumulatedMs -= delay;
-                g.currentFrame = (g.currentFrame + 1) % static_cast<int>(g.decoded.frames.size());
-                g.textureDirty = true;
-            }
-        }
+        g.textureDirty |= advanceAnimation(g.decoded, g.currentFrame, g.accumulatedMs, seconds * 1000.0);
     }
 
     auto msgIt = std::remove_if(messages_.begin(), messages_.end(), [this](const RenderMessage &m) {
@@ -462,6 +434,9 @@ void ChatSource::tick(float seconds)
             return false;
         if (m.texture)
             deferredDestroy_.push_back(m.texture);
+        for (const auto &emote : m.emotes)
+            if (emote.texture)
+                deferredDestroy_.push_back(emote.texture);
         return true;
     });
     messages_.erase(msgIt, messages_.end());
@@ -547,6 +522,18 @@ void ChatSource::render()
                  static_cast<unsigned>(m.image.width()), static_cast<unsigned>(m.image.height()));
         }
         drawTexture(static_cast<gs_texture_t *>(m.texture), m.x, m.y, m.width, m.height);
+        for (auto &emote : m.emotes) {
+            const QImage &frame = emote.layout.image->frames[static_cast<size_t>(emote.currentFrame)];
+            if (!emote.texture) {
+                emote.texture = createTexture(frame);
+                emote.textureDirty = false;
+            } else if (emote.textureDirty) {
+                updateTexture(emote.texture, frame);
+                emote.textureDirty = false;
+            }
+            const auto &rect = emote.layout.rect;
+            drawTexture(static_cast<gs_texture_t *>(emote.texture), m.x + rect.x(), m.y + rect.y(), rect.width(), rect.height());
+        }
     }
 
     for (auto &g : gifs_) {
@@ -612,7 +599,7 @@ obs_properties_t *ChatSource::properties()
     obs_properties_add_float_slider(layout, S_MIN_SPEED, "Min. Geschwindigkeit (px/s)", 20.0, 2000.0, 10.0);
     obs_properties_add_float_slider(layout, S_MAX_SPEED, "Max. Geschwindigkeit (px/s)", 100.0, 6000.0, 25.0);
     obs_properties_add_int(layout, S_MAX_MSG, "Max. aktive Nachrichten", 4, 300, 1);
-    obs_properties_add_button2(layout, "test_message", "Native Testnachricht", buttonTestMessage, this);
+    obs_properties_add_button2(layout, "test_message", "Emojis und Emotes testen", buttonTestMessage, this);
     obs_properties_add_group(props, "layout_group", "Nachrichten", OBS_GROUP_NORMAL, layout);
 
     obs_properties_t *gifs = obs_properties_create();
