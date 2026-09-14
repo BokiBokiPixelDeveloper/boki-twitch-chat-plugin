@@ -23,6 +23,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/plugin-main.cpp
     src/renderer/chat-source.cpp
     src/twitch/twitch-client.cpp
+    src/updater/update-checker.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE src)

@@ -6,6 +6,7 @@
 #include <QMutexLocker>
 #include <QPainter>
 #include <QPainterPath>
+#include <QTimer>
 
 #include <graphics/graphics.h>
 #include <obs-module.h>
@@ -34,6 +35,7 @@ constexpr const char *S_MAX_GIFS = "max_gifs";
 constexpr const char *S_GIF_SIZE = "gif_size";
 constexpr const char *S_GIF_SPEED = "gif_speed";
 constexpr const char *S_GIF_LIFETIME = "gif_lifetime";
+constexpr const char *S_AUTO_UPDATE_CHECK = "auto_update_check";
 
 bool buttonConnect(obs_properties_t *, obs_property_t *, void *data)
 {
@@ -53,6 +55,18 @@ bool buttonTestGif(obs_properties_t *, obs_property_t *, void *data)
     return false;
 }
 
+bool buttonCheckUpdates(obs_properties_t *, obs_property_t *, void *data)
+{
+    static_cast<ChatSource *>(data)->checkForUpdates();
+    return true;
+}
+
+bool buttonInstallUpdate(obs_properties_t *, obs_property_t *, void *data)
+{
+    static_cast<ChatSource *>(data)->installUpdate();
+    return true;
+}
+
 QColor safeColor(const QColor &c)
 {
     return c.isValid() ? c : QColor(0x91, 0xC8, 0xFF);
@@ -67,8 +81,20 @@ ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source) : source_(sou
         [this](QString state) { status_ = std::move(state); },
         [this](QString access, QString refresh) { persistTokens(access, refresh); });
 
+    updater_ = std::make_unique<UpdateChecker>(QString::fromUtf8(BOKIS_TWITCH_CHAT_VERSION), [this]() {
+        if (source_)
+            obs_source_update_properties(source_);
+    });
+
     update(settings);
     twitch_->startOrResume();
+
+    if (obs_data_get_bool(settings, S_AUTO_UPDATE_CHECK)) {
+        QTimer::singleShot(2500, updater_.get(), [this]() {
+            if (updater_)
+                updater_->checkForUpdates();
+        });
+    }
 }
 
 ChatSource::~ChatSource()
@@ -167,6 +193,18 @@ void ChatSource::connectTwitch()
     update(settings);
     obs_data_release(settings);
     twitch_->beginDeviceFlow();
+}
+
+void ChatSource::checkForUpdates()
+{
+    if (updater_)
+        updater_->checkForUpdates();
+}
+
+void ChatSource::installUpdate()
+{
+    if (updater_)
+        updater_->installAvailableUpdate();
 }
 
 void ChatSource::addTestMessage()
@@ -584,6 +622,17 @@ obs_properties_t *ChatSource::properties()
     obs_properties_add_float_slider(gifs, S_GIF_LIFETIME, "GIF-Lebensdauer (Sekunden)", 2.0, 60.0, 0.5);
     obs_properties_add_button2(gifs, "test_gif", "Native GIF-Animation testen", buttonTestGif, this);
     obs_properties_add_group(props, "gif_group", "GIFs", OBS_GROUP_NORMAL, gifs);
+
+    obs_properties_t *updates = obs_properties_create();
+    const QByteArray versionInfo = QStringLiteral("Installiert: %1").arg(QString::fromUtf8(BOKIS_TWITCH_CHAT_VERSION)).toUtf8();
+    obs_properties_add_text(updates, "installed_version_info", versionInfo.constData(), OBS_TEXT_INFO);
+    obs_properties_add_bool(updates, S_AUTO_UPDATE_CHECK, "Beim Start automatisch nach Updates suchen");
+    const QByteArray updateStatus = QStringLiteral("Status: %1").arg(updater_ ? updater_->status() : QStringLiteral("Updater nicht verfügbar")).toUtf8();
+    obs_properties_add_text(updates, "update_status_info", updateStatus.constData(), OBS_TEXT_INFO);
+    obs_properties_add_button2(updates, "check_updates", "Nach Updates suchen", buttonCheckUpdates, this);
+    obs_property_t *installButton = obs_properties_add_button2(updates, "install_update", "Update installieren", buttonInstallUpdate, this);
+    obs_property_set_enabled(installButton, updater_ && updater_->hasAvailableUpdate() && !updater_->busy());
+    obs_properties_add_group(props, "update_group", "Updates", OBS_GROUP_NORMAL, updates);
 
     return props;
 }

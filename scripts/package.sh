@@ -12,6 +12,10 @@ install -m 0755 "$SO" "$PKG/plugin/bin/64bit/bokis-twitch-chat-plugin.so"
 cp "$ROOT/VERSION" "$PKG/VERSION"
 cp "$ROOT/README.md" "$PKG/README.md"
 mkdir -p "$OUT"
+
+BINARY_ASSET="$OUT/bokis-twitch-chat-plugin-$VERSION-linux-x86_64.so"
+install -m 0755 "$SO" "$BINARY_ASSET"
+sha256sum "$BINARY_ASSET" > "$BINARY_ASSET.sha256"
 (
   cd "$OUT"
   rm -f "bokis-twitch-chat-plugin-$VERSION-linux-x86_64.zip"

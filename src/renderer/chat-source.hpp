@@ -2,6 +2,7 @@
 
 #include "chat/chat-types.hpp"
 #include "twitch/twitch-client.hpp"
+#include "updater/update-checker.hpp"
 
 #include <QMutex>
 #include <QString>
@@ -29,6 +30,8 @@ public:
     void connectTwitch();
     void addTestMessage();
     void addTestGif();
+    void checkForUpdates();
+    void installUpdate();
 
     QString status() const;
 
@@ -48,6 +51,7 @@ private:
 
     obs_source_t *source_ = nullptr;
     std::unique_ptr<TwitchClient> twitch_;
+    std::unique_ptr<UpdateChecker> updater_;
 
     mutable QMutex pendingMutex_;
     std::deque<PendingChatMessage> pendingMessages_;

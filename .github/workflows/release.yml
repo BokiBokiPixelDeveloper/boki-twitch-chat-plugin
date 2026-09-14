@@ -49,8 +49,9 @@ jobs:
         run: |
           VERSION="$(tr -d '[:space:]' < VERSION)"
           ZIP="bokis-twitch-chat-plugin-${VERSION}-linux-x86_64.zip"
-          HASH="$(cut -d' ' -f1 "release/${ZIP}.sha256")"
-          SIZE="$(stat -c%s "release/${ZIP}")"
+          BINARY="bokis-twitch-chat-plugin-${VERSION}-linux-x86_64.so"
+          HASH="$(cut -d' ' -f1 "release/${BINARY}.sha256")"
+          SIZE="$(stat -c%s "release/${BINARY}")"
           cat > release/update-manifest.json <<JSON
           {
             "schema": 1,
@@ -58,7 +59,7 @@ jobs:
             "channel": "stable",
             "platforms": {
               "linux-x86_64": {
-                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${ZIP}",
+                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${BINARY}",
                 "sha256": "${HASH}",
                 "size": ${SIZE}
               }
@@ -76,6 +77,7 @@ jobs:
           name: release-payload
           path: |
             release/*.zip
+            release/*.so
             release/*.sha256
             release/update-manifest.json
 

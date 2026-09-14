@@ -73,6 +73,7 @@ static void sourceDefaults(obs_data_t *settings)
     obs_data_set_default_int(settings, "gif_size", 190);
     obs_data_set_default_double(settings, "gif_speed", 170.0);
     obs_data_set_default_double(settings, "gif_lifetime", 12.0);
+    obs_data_set_default_bool(settings, "auto_update_check", true);
 }
 
 static obs_source_info sourceInfo = {};

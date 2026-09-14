@@ -15,6 +15,8 @@ The project is intentionally not named after one visual style. The current imple
 - GitHub CI baseline
 - Tag-driven GitHub Release baseline
 - SHA-256 release package + update manifest generation
+- Built-in update checker in OBS properties
+- Verified in-place Linux plugin update with automatic backup and restart prompt
 - Architecture reserved for additional render modes and web themes
 
 See `docs/ARCHITECTURE.md` for the multi-renderer direction.
@@ -82,3 +84,16 @@ See `docs/GITHUB_SETUP.md`.
 ## Agent usage
 
 OpenCode/Codex/other coding agents should read `AGENTS.md` before modifying this repository.
+
+## Built-in updater
+
+The OBS source properties include an **Updates** section from the first installation:
+
+- current version
+- automatic update check on startup
+- **Nach Updates suchen**
+- **Update installieren** when a newer compatible release is available
+
+The updater downloads the release binary, verifies its SHA-256 from `update-manifest.json`, backs up the currently loaded plugin, and replaces the on-disk `.so` atomically. OBS keeps the already loaded binary mapped until exit; the new version becomes active after a full OBS restart.
+
+For unauthenticated update checks the GitHub release feed must be publicly readable. If the source repository remains private, use a separate public release/feed repository rather than embedding a GitHub personal access token in the plugin.
