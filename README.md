@@ -12,6 +12,8 @@ The project is intentionally not named after one visual style. The current imple
 - Floating renderer with lane/sub-lane logic
 - GIF objects with lifetime/bounce behavior
 - Configurable font settings
+- Inline static/animated Twitch, 7TV, BetterTTV and FrankerFaceZ emotes
+- Bundled color Unicode emoji font (including skin tones, flags and ZWJ sequences)
 - GitHub CI baseline
 - Tag-driven GitHub Release baseline
 - SHA-256 release package + update manifest generation
@@ -29,6 +31,40 @@ See `docs/ARCHITECTURE.md` for the multi-renderer direction.
 
 Twitch connectivity and normalized message data should be shared across all modes.
 
+## Emoji and emote support
+
+Twitch emotes are read from the ordered EventSub fragments, using the animated CDN
+variant when available. Global and channel emote catalogs for **7TV, BetterTTV and
+FrankerFaceZ** load automatically when connecting and refresh every five minutes.
+Third-party codes match whole, case-sensitive whitespace-separated tokens; native
+Twitch fragments take precedence. Channel catalogs override global catalogs, with
+7TV, then BetterTTV, then FrankerFaceZ resolving collisions within each scope.
+7TV zero-width emotes and BetterTTV modifier emotes overlay the preceding emote.
+
+PNG, GIF and animated WebP images render inline at the message's font size with
+their original aspect ratio. Animations use individual frame delays and loop with
+OBS timing. Existing free-moving GIF settings continue to control separate GIF
+objects; they do not disable inline emotes.
+
+Image requests share a 64 MiB CPU cache and at most six concurrent downloads. A
+message waits up to 2.5 seconds for its assets while preserving arrival order;
+failed/late images retain their original text. Downloads are limited to 8 MiB,
+source dimensions to 2048 px, and decoded images to 512 frames / 16 MiB with frames
+scaled to at most 256 px. Longer animations use smaller frames to fit the memory
+budget while retaining their complete loop; animations beyond 512 frames are
+shortened. Active messages retain shared image ownership beyond the cache's lifetime.
+
+The native text renderer uses the bundled **Noto Color Emoji** font, so Unicode
+emoji work offline without a separately installed font. Its license and pinned
+upstream revision are in `resources/fonts/`. This adds about 10 MiB to the plugin.
+Building now requires **Qt 6.9+** for modern emoji shaping and **libwebp** for WebP
+decoding; the Arch bootstrap and CI install the dependencies.
+
+In OBS source properties, use **Nachrichten → Emojis und Emotes testen** to display
+Unicode emoji plus a static and animated sample without Twitch access. Live Twitch
+emotes and provider catalogs require an internet connection. Cheermotes, personal
+7TV emote sets and provider-specific CSS/mask effects are not implemented.
+
 ## Local Arch development
 
 Install dependencies:
@@ -41,6 +77,14 @@ Build:
 
 ```bash
 ./scripts/build-local.sh
+```
+
+Run the offline regression tests:
+
+```bash
+cmake --preset linux-x86_64 -DENABLE_TESTS=ON
+cmake --build --preset linux-x86_64
+ctest --test-dir build/linux-x86_64 --output-on-failure
 ```
 
 Install into the current user's OBS profile:

@@ -15,7 +15,20 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" BOKIS_TWITCH_CHAT_VERSION)
 string(STRIP "${BOKIS_TWITCH_CHAT_VERSION}" BOKIS_TWITCH_CHAT_VERSION)
 
 find_package(libobs REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Network WebSockets)
+find_package(Qt6 6.9 REQUIRED COMPONENTS Core Gui Network WebSockets)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebpdemux)
+
+add_library(chat-support STATIC
+    src/chat/emote-catalog.cpp
+    src/chat/emote-service.cpp
+    src/chat/image-cache.cpp
+    src/renderer/message-layout.cpp
+)
+set_target_properties(chat-support PROPERTIES AUTOMOC ON)
+target_include_directories(chat-support PUBLIC src)
+target_link_libraries(chat-support PUBLIC Qt6::Core Qt6::Gui Qt6::Network PkgConfig::WEBP)
+target_compile_definitions(chat-support PUBLIC QT_NO_KEYWORDS)
 
 add_library(${PROJECT_NAME} MODULE)
 
@@ -24,11 +37,13 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/renderer/chat-source.cpp
     src/twitch/twitch-client.cpp
     src/updater/update-checker.cpp
+    resources/emoji.qrc
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE src)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
+    chat-support
     OBS::libobs
     Qt6::Core
     Qt6::Gui
@@ -50,6 +65,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     PREFIX ""
     OUTPUT_NAME "bokis-twitch-chat-plugin"
     AUTOMOC ON
+    AUTORCC ON
 )
 
 include(GNUInstallDirs)

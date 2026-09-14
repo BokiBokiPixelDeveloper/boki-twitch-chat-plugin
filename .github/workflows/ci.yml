@@ -18,16 +18,19 @@ jobs:
       - name: Install CI dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm git cmake ninja obs-studio qt6-base qt6-websockets
+          pacman -S --noconfirm git cmake ninja obs-studio qt6-base qt6-websockets libwebp
 
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake --preset linux-ci-x86_64
+        run: cmake --preset linux-ci-x86_64 -DENABLE_TESTS=ON
 
       - name: Build
         run: cmake --build --preset linux-ci-x86_64
+
+      - name: Test
+        run: ctest --test-dir build/linux-ci-x86_64 --output-on-failure
 
       - name: Verify plugin artifact
         run: test -f build/linux-ci-x86_64/bokis-twitch-chat-plugin.so

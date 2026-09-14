@@ -1,6 +1,6 @@
 #pragma once
 
-#include "chat/chat-types.hpp"
+#include "renderer/render-types.hpp"
 #include "twitch/twitch-client.hpp"
 #include "updater/update-checker.hpp"
 
@@ -36,12 +36,11 @@ public:
     QString status() const;
 
 private:
-    void enqueueMessage(PendingChatMessage message);
+    void enqueueMessage(ChatMessage message);
     void enqueueGif(DecodedGif gif);
     void persistTokens(const QString &accessToken, const QString &refreshToken);
 
     void consumePending();
-    QImage rasterizeMessage(const PendingChatMessage &msg, int fontPx) const;
     float chooseY(float messageHeight, float messageWidth, float speed);
     float collisionScore(float x, float y, float w, float h, float speed) const;
 
@@ -54,7 +53,7 @@ private:
     std::unique_ptr<UpdateChecker> updater_;
 
     mutable QMutex pendingMutex_;
-    std::deque<PendingChatMessage> pendingMessages_;
+    std::deque<PreparedMessage> pendingMessages_;
     std::deque<DecodedGif> pendingGifs_;
 
     std::vector<RenderMessage> messages_;

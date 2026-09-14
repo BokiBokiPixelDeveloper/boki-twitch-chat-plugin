@@ -11,6 +11,8 @@ mkdir -p "$PKG/plugin/bin/64bit"
 install -m 0755 "$SO" "$PKG/plugin/bin/64bit/bokis-twitch-chat-plugin.so"
 cp "$ROOT/VERSION" "$PKG/VERSION"
 cp "$ROOT/README.md" "$PKG/README.md"
+mkdir -p "$PKG/licenses"
+cp "$ROOT/resources/fonts/OFL.txt" "$PKG/licenses/NotoColorEmoji-OFL.txt"
 mkdir -p "$OUT"
 
 BINARY_ASSET="$OUT/bokis-twitch-chat-plugin-$VERSION-linux-x86_64.so"

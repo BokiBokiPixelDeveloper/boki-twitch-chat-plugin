@@ -42,6 +42,23 @@ The shared core should eventually own:
 
 Renderer-specific behavior must stay outside the Twitch client. Lane scheduling belongs to the floating renderer; vertical stacking belongs to the classic renderer.
 
+### Current emoji/emote pipeline
+
+`ChatMessage` contains text and ordered `ChatFragment` records, including emote
+URLs, fallback text and shared immutable decoded images. It contains no positions,
+speeds, lane state or textures. `EmoteCatalog` normalizes Twitch metadata and
+third-party catalogs; `EmoteService` loads the channel/global catalogs and resolves
+images in arrival order. `ImageCache` downloads and decodes CPU images on the Qt
+thread, with size, concurrency, timeout and cache limits.
+
+The Floating renderer builds `MessageLayout` using Qt text shaping and inline
+image slots before enqueueing `PreparedMessage`. Color glyphs are rasterized as
+text rather than converted to vector outlines. `RenderMessage` and `RenderEmote`
+own movement, animation cursors and texture handles exclusively inside the renderer.
+OBS tick advances each animation using its frame delays; OBS render creates,
+updates and destroys GPU textures. Expired messages defer texture destruction to
+the graphics path, including all inline emote textures.
+
 ## Native renderers
 
 Native modes should remain tied to OBS `video_tick` / `video_render` so continuous motion is not dependent on CEF/browser-source frame pacing.
