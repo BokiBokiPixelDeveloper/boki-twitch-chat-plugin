@@ -113,15 +113,18 @@ void holdProcessUseLock()
     static const int lock = acquireLock(modulePath() + ".use.lock", true);
     (void)lock;
 }
-QString processStart(pid_t pid)
+namespace {
+QString startAt(const QString &path)
 {
-    QFile file(QStringLiteral("/proc/%1/stat").arg(pid));
+    QFile file(path + "/stat");
     if (!file.open(QIODevice::ReadOnly)) return {};
     const auto bytes = file.readAll();
     // comm can contain spaces and parentheses. Field 22 follows the last ')'.
     const auto fields = bytes.mid(bytes.lastIndexOf(')') + 2).split(' ');
     return fields.size() > 19 ? QString::fromLatin1(fields[19]) : QString();
 }
+}
+QString processStart(pid_t pid) { return startAt(QStringLiteral("/proc/%1").arg(pid)); }
 bool waitForProcess(pid_t pid, const QString &start, int pidfd)
 {
     if (pid <= 1 || start.isEmpty()) return false;
@@ -141,33 +144,62 @@ bool waitForProcess(pid_t pid, const QString &start, int pidfd)
         poll(nullptr, 0, 200);
     }
 }
-bool ensureNotMapped(const QString &target, QString &error)
+bool ensureNotMapped(const QString &target, QString &error, const MappingScan &scan)
 {
     struct stat targetStat{};
     if (stat(QFile::encodeName(target).constData(), &targetStat) != 0) {
         error = "Plugin-Ziel konnte für die Prozessprüfung nicht gelesen werden";
         return false;
     }
-    const QDir proc("/proc");
-    if (!QFile::exists("/proc/self/maps")) { error = "procfs-Prozessprüfung nicht verfügbar"; return false; }
+    struct stat executableStat{};
+    if (stat(QFile::encodeName(scan.executable).constData(), &executableStat) != 0) {
+        error = "OBS-Executable konnte für die Prozessprüfung nicht gelesen werden";
+        return false;
+    }
+    const auto executablePath = QFileInfo(scan.executable).canonicalFilePath();
+    const QDir proc(scan.procRoot);
+    if (!QFile::exists(scan.procRoot + "/self/maps")) { error = "procfs-Prozessprüfung nicht verfügbar"; return false; }
     for (const auto &pid : proc.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
         bool numeric = false;
         pid.toLongLong(&numeric);
         if (!numeric) continue;
-        const auto path = "/proc/" + pid;
-        struct stat processStat{};
-        if (stat(QFile::encodeName(path).constData(), &processStat) != 0) continue; // Exited.
-        QFile maps(path + "/maps");
-        if (!maps.open(QIODevice::ReadOnly)) {
-            // Other users' maps are normally inaccessible; inspect every readable process.
-            if (processStat.st_uid == geteuid() && QFile::exists(path)) {
-                error = QStringLiteral("Prozessprüfung für PID %1 verweigert; Installation abgebrochen").arg(pid);
-                return false;
+        const auto path = scan.procRoot + "/" + pid;
+        // Pin this proc directory: subsequent accesses cannot follow a reused PID.
+        Fd process(open(QFile::encodeName(path).constData(), O_PATH | O_DIRECTORY | O_CLOEXEC));
+        if (process.value < 0) continue;
+        const auto pinned = QStringLiteral("/proc/self/fd/%1").arg(process.value);
+        const auto start = startAt(pinned);
+        struct stat candidate{};
+        const auto candidateExe = pinned + "/exe";
+        if (stat(QFile::encodeName(candidateExe).constData(), &candidate) != 0) continue;
+        const bool sameInode = candidate.st_dev == executableStat.st_dev && candidate.st_ino == executableStat.st_ino;
+        if (!sameInode && (executablePath.isEmpty() || QFileInfo(candidateExe).canonicalFilePath() != executablePath)) continue;
+        // Unknown/non-OBS executables never cause a maps-permission failure.
+        // Cooperating instances are covered independently by the exclusive .use.lock.
+        if (scan.beforeMaps) scan.beforeMaps(path);
+        const auto exited = [&] {
+            const auto current = startAt(pinned);
+            if (!start.isEmpty() && !current.isEmpty() && current != start) return true;
+            struct stat st{};
+            if (stat(QFile::encodeName(pinned + "/stat").constData(), &st) != 0 &&
+                (errno == ENOENT || errno == ESRCH)) return true;
+            // A zombie has no executable or mappings, even while its proc directory exists.
+            QFile state(pinned + "/stat");
+            if (state.open(QIODevice::ReadOnly)) {
+                const auto bytes = state.readAll();
+                const auto status = bytes.mid(bytes.lastIndexOf(')') + 2, 1);
+                return status == "Z" || status == "X";
             }
-            continue;
+            return false;
+        };
+        QFile maps(pinned + "/maps");
+        const bool opened = maps.open(QIODevice::ReadOnly);
+        const auto contents = opened ? maps.readAll() : QByteArray(); // procfs reports size zero.
+        if (exited()) continue;
+        if (!opened || maps.error() != QFileDevice::NoError || start.isEmpty()) {
+            error = QStringLiteral("Prozessprüfung für OBS-PID %1 verweigert; Installation abgebrochen").arg(pid);
+            return false;
         }
-        const auto contents = maps.readAll(); // procfs files report size zero.
-        if (maps.error() != QFileDevice::NoError) { error = "Fehler beim Lesen von Prozess-Mappings"; return false; }
         for (const auto &line : contents.split('\n')) {
             const auto fields = line.simplified().split(' ');
             if (fields.size() < 5) continue;
@@ -225,14 +257,16 @@ bool launch(const QString &directory, const QString &helper, int lock, QString &
     const auto pid = getpid();
     const auto start = processStart(pid).toUtf8();
     Fd pidfd(static_cast<int>(syscall(SYS_pidfd_open, pid, 0)));
+    Fd executable(open("/proc/self/exe", O_PATH | O_CLOEXEC));
     int pipefd[2];
-    if (lock < 0 || start.isEmpty() || pipe2(pipefd, O_CLOEXEC) != 0) { error = "Helper-Start konnte nicht vorbereitet werden"; return false; }
+    if (lock < 0 || executable.value < 0 || start.isEmpty() || pipe2(pipefd, O_CLOEXEC) != 0) { error = "Helper-Start konnte nicht vorbereitet werden"; return false; }
     Fd reader(pipefd[0]), writer(pipefd[1]);
     const auto exe = QFile::encodeName(helper), dir = QFile::encodeName(directory);
     const auto pidArg = QByteArray::number(pid), fdArg = QByteArray::number(pidfd.value), lockArg = QByteArray::number(lock);
+    const auto executableArg = QByteArray::number(executable.value);
     char *args[] = {const_cast<char *>(exe.constData()), const_cast<char *>(dir.constData()),
         const_cast<char *>(pidArg.constData()), const_cast<char *>(start.constData()),
-        const_cast<char *>(fdArg.constData()), const_cast<char *>(lockArg.constData()), nullptr};
+        const_cast<char *>(fdArg.constData()), const_cast<char *>(lockArg.constData()), const_cast<char *>(executableArg.constData()), nullptr};
     const long maxFd = sysconf(_SC_OPEN_MAX);
     const pid_t child = fork();
     if (child == 0) {
@@ -248,6 +282,7 @@ bool launch(const QString &directory, const QString &helper, int lock, QString &
                 const int ignoredChdir = chdir("/");
                 (void)ignoredChdir;
                 fcntl(lock, F_SETFD, 0);
+                fcntl(executable.value, F_SETFD, 0);
                 if (pidfd.value >= 0) fcntl(pidfd.value, F_SETFD, 0);
                 int nullfd = open("/dev/null", O_RDWR);
                 if (nullfd >= 0) { for (int i = 0; i < 3; ++i) dup2(nullfd, i); }
@@ -274,24 +309,24 @@ int renameFile(const QString &from, const QString &to)
 {
     return ::rename(QFile::encodeName(from).constData(), QFile::encodeName(to).constData());
 }
-void checkMappings(const QString &path)
+void checkMappings(const QString &path, const MappingScan &scan)
 {
     QString error;
-    if (!ensureNotMapped(path, error)) throw std::runtime_error(error.toStdString());
+    if (!ensureNotMapped(path, error, scan)) throw std::runtime_error(error.toStdString());
 }
 struct InstallFile {
     PendingFile file;
     QString candidate, rollback;
     bool swapped = false;
 };
-void restore(const InstallFile &item)
+void restore(const InstallFile &item, const MappingScan &scan)
 {
     // Keep the original rollback inode available until all restores are durable.
     struct stat original{}, current{};
     require(stat(QFile::encodeName(item.rollback).constData(), &original) == 0, "Rücksicherungsdatei fehlt");
     if (stat(QFile::encodeName(item.file.target).constData(), &current) == 0 &&
         original.st_dev == current.st_dev && original.st_ino == current.st_ino) return;
-    if (QFileInfo(item.file.target).fileName() == "bokis-twitch-chat-plugin.so") checkMappings(item.file.target);
+    if (QFileInfo(item.file.target).fileName() == "bokis-twitch-chat-plugin.so") checkMappings(item.file.target, scan);
     const auto restoring = item.rollback + ".restore";
     QFile::remove(restoring);
     require(::link(QFile::encodeName(item.rollback).constData(), QFile::encodeName(restoring).constData()) == 0,
@@ -314,7 +349,7 @@ void cleanupTransaction(const std::vector<InstallFile> &files, const QString &jo
 }
 }
 bool install(const QString &directory, const QString &backups, const QString &result,
-             const std::function<bool()> &waiter, QString &error, const RenameOperation &renameOperation)
+             const std::function<bool()> &waiter, QString &error, const RenameOperation &renameOperation, const MappingScan &scan)
 {
     Pending p;
     const QString journalPath = directory + "/transaction.json";
@@ -327,7 +362,7 @@ bool install(const QString &directory, const QString &backups, const QString &re
         p = readPending(directory);
         useLock.value = acquireLock(p.target + ".use.lock");
         require(useLock.value >= 0, "Eine weitere OBS-Instanz verwendet das Plugin");
-        checkMappings(p.target);
+        checkMappings(p.target, scan);
         if (p.helper) files.push_back({*p.helper, {}, {}, false}); // Helper first; plugin is the final swap.
         files.push_back({{p.sha256, p.binary, p.target, p.size}, {}, {}, false});
 
@@ -360,8 +395,8 @@ bool install(const QString &directory, const QString &backups, const QString &re
                 committed = true; // Finish an interrupted result/state cleanup without installing twice.
             } else {
                 for (auto it = files.rbegin(); it != files.rend(); ++it) {
-                    if (it->file.target == p.target) checkMappings(p.target);
-                    restore(*it);
+                    if (it->file.target == p.target) checkMappings(p.target, scan);
+                    restore(*it, scan);
                 }
                 cleanupTransaction(files, journalPath);
                 journalPrepared = false;
@@ -402,7 +437,7 @@ bool install(const QString &directory, const QString &backups, const QString &re
             journalPrepared = true;
             saveJson(journalPath, journal);
             for (auto &item : files) {
-                checkMappings(p.target); // Also catch instances that appeared while copying/backing up.
+                checkMappings(p.target, scan); // Also catch instances that appeared while copying/backing up.
                 const auto renamed = renameOperation ? renameOperation(item.candidate, item.file.target) : renameFile(item.candidate, item.file.target);
                 require(renamed == 0, "Atomarer Austausch fehlgeschlagen");
                 item.swapped = true;
@@ -417,8 +452,8 @@ bool install(const QString &directory, const QString &backups, const QString &re
         if (!committed && journalPrepared) {
             try {
                 for (auto it = files.rbegin(); it != files.rend(); ++it) {
-                    if (it->file.target == p.target && it->swapped) checkMappings(p.target);
-                    restore(*it);
+                    if (it->file.target == p.target && it->swapped) checkMappings(p.target, scan);
+                    restore(*it, scan);
                 }
                 cleanupTransaction(files, journalPath);
                 journalPrepared = false;

@@ -7,6 +7,7 @@
 #include <QProcess>
 #include <QTemporaryDir>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <QJsonArray>
@@ -157,6 +158,32 @@ private Q_SLOTS:
             QVERIFY(QJsonDocument::fromJson(get(result)).object()["helperUpdated"].toBool());
         }
     }
+    void detachedOriginIdentity()
+    {
+        Fixture f;
+        QProcess mapper;
+        mapper.start(QCoreApplication::applicationFilePath(), {"--map-child", f.target});
+        QVERIFY(mapper.waitForReadyRead());
+        QCOMPARE(mapper.readAllStandardOutput(), QByteArray("mapped\n"));
+        QProcess origin;
+        auto env = QProcessEnvironment::systemEnvironment();
+        env.insert("XDG_STATE_HOME", f.temp.path() + "/state");
+        env.insert("XDG_DATA_HOME", f.temp.path() + "/data");
+        origin.setProcessEnvironment(env);
+        origin.start(QCoreApplication::applicationFilePath(), {"--launch-child", f.pending});
+        QVERIFY(origin.waitForReadyRead());
+        QCOMPARE(origin.readAllStandardOutput(), QByteArray("ready\n"));
+        origin.write("exit\n");
+        QVERIFY(origin.waitForFinished());
+        const auto result = f.temp.path() + "/state/bokis-twitch-chat-plugin/last-update-result.json";
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(result), 5000);
+        mapper.write("exit\n");
+        QVERIFY(mapper.waitForFinished());
+        const auto outcome = QJsonDocument::fromJson(get(result)).object();
+        QVERIFY(!outcome["success"].toBool(true));
+        QVERIFY2(outcome["error"].toString().contains("gemappt"), qPrintable(outcome["error"].toString()));
+        QCOMPARE(get(f.target), oldBytes);
+    }
     void helperTransaction()
     {
         Fixture f; f.addHelper(); QString error;
@@ -263,6 +290,70 @@ private Q_SLOTS:
         QVERIFY2(error.contains("gemappt"), qPrintable(error));
         QCOMPARE(get(f.target), oldBytes);
         QCOMPARE(get(f.p.helper->target), QByteArray("old helper"));
+    }
+    void mappingCandidates_data()
+    {
+        QTest::addColumn<QString>("kind");
+        QTest::addColumn<bool>("allowed");
+        QTest::newRow("same-user-non-obs-unreadable-maps") << QString("other") << true;
+        QTest::newRow("obs-mapped-plugin") << QString("mapped") << false;
+        QTest::newRow("obs-unreadable-maps") << QString("unreadable") << false;
+        QTest::newRow("obs-readable-unmapped") << QString("clear") << true;
+        QTest::newRow("exit-after-classification") << QString("exit") << true;
+        QTest::newRow("pid-reused-after-classification") << QString("reuse") << true;
+        QTest::newRow("zombie-after-classification") << QString("zombie") << true;
+        QTest::newRow("exit-before-exe-access") << QString("no-exe") << true;
+        QTest::newRow("obs-missing-maps-but-live") << QString("missing-maps") << false;
+        QTest::newRow("same-inode-different-exe-path") << QString("alias") << false;
+    }
+    void mappingCandidates()
+    {
+        QFETCH(QString, kind); QFETCH(bool, allowed);
+        Fixture f; QString error;
+        const auto proc = f.temp.path() + "/proc";
+        const auto process = proc + "/1340";
+        QVERIFY(QDir().mkpath(process));
+        QVERIFY(QDir().mkpath(proc + "/self"));
+        put(proc + "/self/maps", "");
+        const auto executable = f.temp.path() + "/obs";
+        const auto other = f.temp.path() + "/other/obs"; // Same name is not identity.
+        QVERIFY(QDir().mkpath(QFileInfo(other).absolutePath()));
+        put(executable, "original executable"); put(other, "different executable");
+        const auto statBytes = [](const QByteArray &start, const QByteArray &state = "S") {
+            return "1340 (obs with spaces) " + state + ' ' + QByteArray("0 ").repeated(18) + start + " 0\n";
+        };
+        put(process + "/stat", statBytes("100"));
+        if (kind != "no-exe") {
+            if (kind == "alias")
+                QVERIFY(::link(QFile::encodeName(executable).constData(), QFile::encodeName(process + "/exe").constData()) == 0);
+            else
+                QVERIFY(QFile::link(kind == "other" ? other : executable, process + "/exe"));
+        }
+        if (kind == "other" || kind == "unreadable" || kind == "exit" || kind == "reuse" || kind == "zombie") {
+            // A directory gives a deterministic read failure even under root.
+            QVERIFY(QDir().mkpath(process + "/maps"));
+            QVERIFY(QFile::setPermissions(process + "/maps", QFileDevice::Permissions{}));
+        } else if (kind != "missing-maps") {
+            struct stat st{};
+            QVERIFY(stat(QFile::encodeName(f.target).constData(), &st) == 0);
+            put(process + "/maps", kind == "clear" ? QByteArray() :
+                QStringLiteral("1000-2000 r--p 00000000 %1:%2 %3 /alias with spaces\n")
+                    .arg(major(st.st_dev), 0, 16).arg(minor(st.st_dev), 0, 16).arg(st.st_ino).toUtf8());
+        }
+        int classified = 0;
+        postexit::MappingScan scan{executable, proc, [&](const QString &path) {
+            ++classified;
+            if (kind == "exit") QFile::remove(path + "/stat");
+            if (kind == "reuse") put(path + "/stat", statBytes(QByteArray::number(100 + classified)));
+            if (kind == "zombie") put(path + "/stat", statBytes("100", "Z"));
+        }};
+        QCOMPARE(postexit::ensureNotMapped(f.target, error, scan), allowed);
+        QCOMPARE(classified, kind == "other" || kind == "no-exe" ? 0 : 1);
+        if (!allowed) QVERIFY2(!error.isEmpty(), "OBS candidate must fail closed");
+        // Exercise the same scan through installation, including its primary lock.
+        QCOMPARE(postexit::install(f.pending, f.backups, f.result, [] { return true; }, error, {}, scan), allowed);
+        QCOMPARE(get(f.target), allowed ? newBytes : oldBytes);
+        QFile::setPermissions(process + "/maps", QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
     }
     void interruptedTransaction_data()
     {
