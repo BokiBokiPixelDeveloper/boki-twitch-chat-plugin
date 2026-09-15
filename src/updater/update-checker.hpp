@@ -1,5 +1,6 @@
 #pragma once
 
+#include "updater/post-exit.hpp"
 #include <QObject>
 #include <QByteArray>
 #include <QDir>
@@ -11,11 +12,16 @@
 class QNetworkAccessManager;
 class QNetworkReply;
 
+struct RemoteArtifact {
+    QString downloadUrl, sha256;
+    qint64 size = -1;
+};
 struct AvailableUpdate {
     QString version;
     QString downloadUrl;
     QString sha256;
     qint64 size = -1;
+    std::optional<RemoteArtifact> helper;
 };
 
 class UpdateChecker final : public QObject {
@@ -30,7 +36,7 @@ public:
     void checkForUpdates();
     void installAvailableUpdate();
 
-    QString status() const { return status_; }
+    QString status() const { return lastResult_.isEmpty() ? status_ : lastResult_ + "\n" + status_; }
     QString availableVersion() const { return available_.version; }
     bool hasAvailableUpdate() const { return hasAvailable_; }
     bool busy() const { return state_ == State::Checking || state_ == State::Downloading; }
@@ -41,11 +47,17 @@ private:
     void setStatus(State state, QString status);
     void notifyStateChanged();
     void handleManifestReply(QNetworkReply *reply);
-    void handleBinaryReply(QNetworkReply *reply);
+    void handleBinaryReply(QNetworkReply *reply, bool helper = false);
     bool stageBinaryAtomically(const QByteArray &payload, QString *errorMessage);
     static bool isNewerVersion(const QString &candidate, const QString &current);
 
-    QString pendingDirectory_{QDir::homePath() + QStringLiteral("/.cache/bokis-twitch-chat-plugin/pending")};
+    bool resumePending();
+    QString pendingDirectory_{postexit::cacheDirectory()};
+    QString targetPath_{postexit::modulePath()};
+    std::function<bool(const QString &, const QString &, int, QString &)> launcher_{postexit::launch};
+    int updateLock_ = -1;
+    QString lastResult_;
+    QByteArray pluginPayload_, helperPayload_;
     QString currentVersion_;
     QString status_{QStringLiteral("Noch nicht geprüft")};
     AvailableUpdate available_;

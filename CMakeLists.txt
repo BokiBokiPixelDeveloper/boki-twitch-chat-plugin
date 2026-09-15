@@ -30,6 +30,12 @@ target_include_directories(chat-support PUBLIC src)
 target_link_libraries(chat-support PUBLIC Qt6::Core Qt6::Gui Qt6::Network PkgConfig::WEBP)
 target_compile_definitions(chat-support PUBLIC QT_NO_KEYWORDS)
 
+add_library(post-exit-support STATIC src/updater/post-exit.cpp)
+target_include_directories(post-exit-support PUBLIC src)
+target_link_libraries(post-exit-support PUBLIC Qt6::Core ${CMAKE_DL_LIBS})
+add_executable(bokis-twitch-chat-updater src/updater/helper-main.cpp)
+target_link_libraries(bokis-twitch-chat-updater PRIVATE post-exit-support)
+
 add_library(${PROJECT_NAME} MODULE)
 
 target_sources(${PROJECT_NAME} PRIVATE
@@ -44,6 +50,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE src)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     chat-support
+    post-exit-support
     OBS::libobs
     Qt6::Core
     Qt6::Gui
@@ -69,8 +76,9 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 )
 
 include(GNUInstallDirs)
-install(TARGETS ${PROJECT_NAME}
+install(TARGETS ${PROJECT_NAME} bokis-twitch-chat-updater
     LIBRARY DESTINATION "lib/obs-plugins"
+    RUNTIME DESTINATION "lib/obs-plugins"
 )
 
 if(ENABLE_TESTS)

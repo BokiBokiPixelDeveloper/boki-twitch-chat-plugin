@@ -1,4 +1,5 @@
 #include "renderer/chat-source.hpp"
+#include "updater/post-exit.hpp"
 
 #include <obs-module.h>
 #include <QFontDatabase>
@@ -82,6 +83,7 @@ static int emojiFontId = -1;
 
 bool obs_module_load(void)
 {
+    postexit::holdProcessUseLock();
     emojiFontId = QFontDatabase::addApplicationFont(QStringLiteral(":/bokis-twitch-chat-plugin/fonts/NotoColorEmoji.ttf"));
     if (emojiFontId < 0)
         blog(LOG_WARNING, "[bokis-twitch-chat-plugin] Could not load bundled emoji font");

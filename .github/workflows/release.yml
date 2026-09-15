@@ -36,10 +36,13 @@ jobs:
           fi
 
       - name: Configure
-        run: cmake --preset linux-x86_64
+        run: cmake --preset linux-x86_64 -DENABLE_TESTS=ON
 
       - name: Build
         run: cmake --build --preset linux-x86_64
+
+      - name: Test
+        run: ctest --test-dir build/linux-x86_64 --output-on-failure
 
       - name: Package
         run: ./scripts/package.sh
@@ -50,6 +53,9 @@ jobs:
           VERSION="$(tr -d '[:space:]' < VERSION)"
           ZIP="bokis-twitch-chat-plugin-${VERSION}-linux-x86_64.zip"
           BINARY="bokis-twitch-chat-plugin-${VERSION}-linux-x86_64.so"
+          HELPER="bokis-twitch-chat-updater-${VERSION}-linux-x86_64.bin"
+          HELPER_HASH="$(cut -d' ' -f1 "release/${HELPER}.sha256")"
+          HELPER_SIZE="$(stat -c%s "release/${HELPER}")"
           HASH="$(cut -d' ' -f1 "release/${BINARY}.sha256")"
           SIZE="$(stat -c%s "release/${BINARY}")"
           cat > release/update-manifest.json <<JSON
@@ -61,7 +67,12 @@ jobs:
               "linux-x86_64": {
                 "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${BINARY}",
                 "sha256": "${HASH}",
-                "size": ${SIZE}
+                "size": ${SIZE},
+                "helper": {
+                  "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${HELPER}",
+                  "sha256": "${HELPER_HASH}",
+                  "size": ${HELPER_SIZE}
+                }
               }
             },
             "obs": {
@@ -78,6 +89,7 @@ jobs:
           path: |
             release/*.zip
             release/*.so
+            release/*.bin
             release/*.sha256
             release/update-manifest.json
 

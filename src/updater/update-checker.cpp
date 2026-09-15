@@ -3,6 +3,8 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <unistd.h>
 #include <QPointer>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -12,6 +14,7 @@
 #include <QSaveFile>
 #include <QScopeGuard>
 #include <QVersionNumber>
+#include <QRegularExpression>
 
 #include <obs-module.h>
 
@@ -98,9 +101,53 @@ UpdateChecker::UpdateChecker(QString currentVersion, StateCallback stateChanged,
     : QObject(parent), currentVersion_(normalizeVersion(std::move(currentVersion))), stateChanged_(std::move(stateChanged)),
       network_(std::make_unique<QNetworkAccessManager>())
 {
+    postexit::holdProcessUseLock();
+    QFile result(postexit::stateDirectory() + "/last-update-result.json");
+    if (result.open(QIODevice::ReadOnly)) {
+        const auto doc = QJsonDocument::fromJson(result.readAll());
+        if (doc.isObject() && doc.object().contains("success")) {
+            const auto object = doc.object();
+            lastResult_ = object["success"].toBool()
+                ? QStringLiteral("Update auf %1 erfolgreich installiert.").arg(object["toVersion"].toString())
+                : (object["rollbackFailed"].toBool()
+                    ? QStringLiteral("Update fehlgeschlagen – manuelle Wiederherstellung erforderlich. %1")
+                    : QStringLiteral("Update konnte nicht installiert werden – bisherige Version wurde beibehalten. %1"))
+                    .arg(object["error"].toString());
+            result.remove();
+        }
+    }
+    resumePending();
 }
 
-UpdateChecker::~UpdateChecker() = default;
+UpdateChecker::~UpdateChecker()
+{
+    if (updateLock_ >= 0) close(updateLock_);
+}
+
+bool UpdateChecker::resumePending()
+{
+    if (!QFile::exists(pendingDirectory_ + "/pending.json")) return false;
+    hasAvailable_ = false;
+    const int lock = postexit::acquireLock(pendingDirectory_ + "/update.lock");
+    if (lock < 0) {
+        setStatus(State::Ready, QStringLiteral("Update bereit – OBS vollständig schließen. Die Installation erfolgt automatisch nach dem Beenden."));
+        return true;
+    }
+    QString error;
+    bool started = false;
+    try {
+        const auto pending = postexit::readPending(pendingDirectory_);
+        if (pending.target != targetPath_)
+            error = QStringLiteral("Pending-Update gehört zu einer anderen Plugin-Installation");
+        else
+            started = launcher_(pendingDirectory_, QFileInfo(targetPath_).absolutePath() + "/bokis-twitch-chat-updater", lock, error);
+    } catch (const std::exception &e) { error = QString::fromUtf8(e.what()); }
+    close(lock);
+    setStatus(started ? State::Ready : State::Error, started
+        ? QStringLiteral("Update bereit – OBS vollständig schließen. Die Installation erfolgt automatisch nach dem Beenden.")
+        : QStringLiteral("Pending-Update konnte nicht gestartet werden: %1").arg(error));
+    return true;
+}
 
 void UpdateChecker::setStatus(State state, QString status)
 {
@@ -137,7 +184,7 @@ bool UpdateChecker::isNewerVersion(const QString &candidate, const QString &curr
 
 void UpdateChecker::checkForUpdates()
 {
-    if (busy() || state_ == State::Ready)
+    if (busy() || state_ == State::Ready || resumePending())
         return;
 
     hasAvailable_ = false;
@@ -175,19 +222,30 @@ void UpdateChecker::handleManifestReply(QNetworkReply *reply)
     const QJsonObject platform = root.value(QStringLiteral("platforms")).toObject().value(QStringLiteral("linux-x86_64")).toObject();
     const QString url = platform.value(QStringLiteral("url")).toString();
     const QString sha256 = platform.value(QStringLiteral("sha256")).toString().toLower();
-    const qint64 size = static_cast<qint64>(platform.value(QStringLiteral("size")).toDouble(-1));
+    const qint64 size = platform.value(QStringLiteral("size")).toInteger(-1);
 
-    if (version.isEmpty() || url.isEmpty() || sha256.size() != 64) {
+    if (version.isEmpty() || url.isEmpty() || sha256.size() != 64 || size <= 0) {
         setStatus(State::Error, QStringLiteral("Update-Manifest ist unvollständig"));
         return;
     }
 
+    std::optional<RemoteArtifact> helper;
+    if (platform.contains("helper")) {
+        const auto object = platform["helper"].toObject();
+        helper = RemoteArtifact{object["url"].toString(), object["sha256"].toString().toLower(), object["size"].toInteger(-1)};
+        const QUrl helperUrl(helper->downloadUrl);
+        if (!helperUrl.isValid() || helperUrl.scheme() != "https" || helperUrl.host().isEmpty() ||
+            !QRegularExpression("^[0-9a-f]{64}$").match(helper->sha256).hasMatch() || helper->size <= 0) {
+            setStatus(State::Error, QStringLiteral("Ungültiger Helper-Eintrag im Update-Manifest"));
+            return;
+        }
+    }
     if (!isNewerVersion(version, currentVersion_)) {
         setStatus(State::Current, QStringLiteral("Aktuell – installiert: %1").arg(currentVersion_));
         return;
     }
 
-    available_ = {version, url, sha256, size};
+    available_ = {version, url, sha256, size, helper};
     hasAvailable_ = true;
     setStatus(State::Available, QStringLiteral("Update verfügbar: %1 → %2").arg(currentVersion_, version));
 }
@@ -197,6 +255,20 @@ void UpdateChecker::installAvailableUpdate()
     if (busy() || !hasAvailable_ || state_ == State::Ready)
         return;
 
+    if (resumePending()) return;
+    if (updateLock_ < 0) updateLock_ = postexit::acquireLock(pendingDirectory_ + "/update.lock");
+    if (updateLock_ < 0) {
+        setStatus(State::Error, QStringLiteral("Ein Update wird bereits vorbereitet oder installiert"));
+        return;
+    }
+    // Recheck after acquiring the inter-process lock.
+    if (QFile::exists(pendingDirectory_ + "/pending.json")) {
+        close(updateLock_); updateLock_ = -1;
+        resumePending();
+        return;
+    }
+    pluginPayload_.clear();
+    helperPayload_.clear();
     setStatus(State::Downloading, QStringLiteral("Lade Update %1 …").arg(available_.version));
 
     QNetworkRequest request(QUrl(available_.downloadUrl));
@@ -206,8 +278,15 @@ void UpdateChecker::installAvailableUpdate()
     QObject::connect(reply, &QNetworkReply::finished, this, [this, reply]() { handleBinaryReply(reply); });
 }
 
-void UpdateChecker::handleBinaryReply(QNetworkReply *reply)
+void UpdateChecker::handleBinaryReply(QNetworkReply *reply, bool helper)
 {
+    const auto unlock = qScopeGuard([this] {
+        if (state_ != State::Downloading) {
+            if (updateLock_ >= 0) { close(updateLock_); updateLock_ = -1; }
+            pluginPayload_.clear();
+            helperPayload_.clear();
+        }
+    });
     const auto guard = std::unique_ptr<QNetworkReply, void (*)(QNetworkReply *)>(reply, [](QNetworkReply *r) { r->deleteLater(); });
     const auto notify = qScopeGuard([this] { notifyStateChanged(); });
 
@@ -217,25 +296,46 @@ void UpdateChecker::handleBinaryReply(QNetworkReply *reply)
     }
 
     const QByteArray payload = reply->readAll();
-    if (available_.size >= 0 && payload.size() != available_.size) {
+    const qint64 expectedSize = helper ? available_.helper->size : available_.size;
+    const QString expectedHash = helper ? available_.helper->sha256 : available_.sha256;
+    if (payload.size() != expectedSize) {
         setStatus(State::Error, QStringLiteral("Update verworfen: Dateigröße stimmt nicht"));
         return;
     }
 
     const QString actualHash = QString::fromLatin1(QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex());
-    if (actualHash.compare(available_.sha256, Qt::CaseInsensitive) != 0) {
+    if (actualHash.compare(expectedHash, Qt::CaseInsensitive) != 0) {
         setStatus(State::Error, QStringLiteral("Update verworfen: SHA-256 stimmt nicht"));
         return;
     }
 
+    if (!payload.startsWith(QByteArray("\x7f" "ELF", 4))) {
+        setStatus(State::Error, QStringLiteral("Update verworfen: Keine ELF-Datei"));
+        return;
+    }
+    if (!helper && available_.helper) {
+        pluginPayload_ = payload;
+        setStatus(State::Downloading, QStringLiteral("Lade Updater für Update %1 …").arg(available_.version));
+        QNetworkRequest request(QUrl(available_.helper->downloadUrl));
+        request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Bokis-Twitch-Chat-Plugin/%1").arg(currentVersion_));
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        auto *next = network_->get(request);
+        QObject::connect(next, &QNetworkReply::finished, this, [this, next] { handleBinaryReply(next, true); });
+        return; // Retain the same lock until both downloads and staging finish.
+    }
+    if (helper) helperPayload_ = payload;
     QString error;
-    if (!stageBinaryAtomically(payload, &error)) {
+    if (!stageBinaryAtomically(helper ? pluginPayload_ : payload, &error)) {
         setStatus(State::Error, QStringLiteral("Update konnte nicht bereitgestellt werden: %1").arg(error));
         return;
     }
 
     hasAvailable_ = false;
-    setStatus(State::Ready, QStringLiteral("Update bereit – OBS neu starten"));
+    if (!launcher_(pendingDirectory_, QFileInfo(targetPath_).absolutePath() + "/bokis-twitch-chat-updater", updateLock_, error)) {
+        setStatus(State::Error, QStringLiteral("Update gespeichert, Helper-Start fehlgeschlagen: %1").arg(error));
+        return;
+    }
+    setStatus(State::Ready, QStringLiteral("Update bereit – OBS vollständig schließen. Die Installation erfolgt automatisch nach dem Beenden."));
 }
 
 bool UpdateChecker::stageBinaryAtomically(const QByteArray &payload, QString *errorMessage)
@@ -247,26 +347,40 @@ bool UpdateChecker::stageBinaryAtomically(const QByteArray &payload, QString *er
         *errorMessage = QStringLiteral("Pending-Verzeichnis konnte nicht erstellt werden");
         return false;
     }
-    const QString binaryPath = pendingDir + QStringLiteral("/bokis-twitch-chat-plugin.so");
-
-    QSaveFile output(binaryPath);
-    output.setDirectWriteFallback(false);
-    if (!output.open(QIODevice::WriteOnly)) {
-        *errorMessage = QStringLiteral("Keine Schreibrechte auf %1").arg(binaryPath);
-        return false;
+    const QString binaryPath = pendingDir + "/bokis-twitch-chat-plugin.so";
+    const QString helperPath = pendingDir + "/bokis-twitch-chat-updater";
+    QStringList savedPaths;
+    auto save = [&](const QString &path, const QByteArray &bytes) {
+        if (QFileInfo(path).isSymLink() || QFileInfo(path).canonicalFilePath() == targetPath_) {
+            *errorMessage = QStringLiteral("Unsicherer Pending-Pfad");
+            return false;
+        }
+        QSaveFile output(path);
+        output.setDirectWriteFallback(false);
+        if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size() ||
+            !output.flush() || fsync(output.handle()) != 0 || !output.commit()) {
+            *errorMessage = QStringLiteral("Atomare Bereitstellung fehlgeschlagen: %1").arg(path);
+            return false;
+        }
+        savedPaths.append(path);
+        return true;
+    };
+    // Metadata is the commit marker: no helper may consume either file before it exists.
+    bool complete = false;
+    const auto cleanup = qScopeGuard([&] {
+        if (!complete) {
+            for (const auto &path : savedPaths) QFile::remove(path);
+            QFile::remove(pendingDir + "/pending.json");
+        }
+    });
+    if (!save(binaryPath, payload)) return false;
+    postexit::Pending pending{currentVersion_, available_.version, available_.sha256,
+        binaryPath, targetPath_, payload.size(), std::nullopt};
+    if (available_.helper) {
+        if (!save(helperPath, helperPayload_)) return false;
+        pending.helper = postexit::PendingFile{available_.helper->sha256, helperPath,
+            QFileInfo(targetPath_).absolutePath() + "/bokis-twitch-chat-updater", helperPayload_.size()};
     }
-    if (output.write(payload) != payload.size()) {
-        output.cancelWriting();
-        *errorMessage = QStringLiteral("Update konnte nicht vollständig geschrieben werden");
-        return false;
-    }
-    if (!output.commit()) {
-        *errorMessage = QStringLiteral("Atomare Bereitstellung ist fehlgeschlagen");
-        return false;
-    }
-
-    QFile::setPermissions(binaryPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner |
-                                         QFileDevice::ReadGroup | QFileDevice::ExeGroup | QFileDevice::ReadOther |
-                                         QFileDevice::ExeOther);
-    return true;
+    complete = postexit::writePending(pendingDir, pending, *errorMessage);
+    return complete;
 }

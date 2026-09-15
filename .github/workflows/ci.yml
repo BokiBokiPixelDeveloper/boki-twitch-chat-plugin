@@ -33,4 +33,6 @@ jobs:
         run: ctest --test-dir build/linux-ci-x86_64 --output-on-failure
 
       - name: Verify plugin artifact
-        run: test -f build/linux-ci-x86_64/bokis-twitch-chat-plugin.so
+        run: |
+          test -f build/linux-ci-x86_64/bokis-twitch-chat-plugin.so
+          test -x build/linux-ci-x86_64/bokis-twitch-chat-updater
