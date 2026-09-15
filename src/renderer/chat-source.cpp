@@ -92,6 +92,7 @@ ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source) : source_(sou
 
 ChatSource::~ChatSource()
 {
+    updater_.reset(); // Invalidate queued updater UI notifications before source teardown.
     twitch_->disconnect();
     twitch_.reset();
     obs_enter_graphics();
@@ -616,7 +617,8 @@ obs_properties_t *ChatSource::properties()
     obs_properties_add_bool(updates, S_AUTO_UPDATE_CHECK, "Beim Start automatisch nach Updates suchen");
     const QByteArray updateStatus = QStringLiteral("Status: %1").arg(updater_ ? updater_->status() : QStringLiteral("Updater nicht verfügbar")).toUtf8();
     obs_properties_add_text(updates, "update_status_info", updateStatus.constData(), OBS_TEXT_INFO);
-    obs_properties_add_button2(updates, "check_updates", "Nach Updates suchen", buttonCheckUpdates, this);
+    obs_property_t *checkButton = obs_properties_add_button2(updates, "check_updates", "Nach Updates suchen", buttonCheckUpdates, this);
+    obs_property_set_enabled(checkButton, updater_ && !updater_->busy() && updater_->state() != UpdateChecker::State::Ready);
     obs_property_t *installButton = obs_properties_add_button2(updates, "install_update", "Update installieren", buttonInstallUpdate, this);
     obs_property_set_enabled(installButton, updater_ && updater_->hasAvailableUpdate() && !updater_->busy());
     obs_properties_add_group(props, "update_group", "Updates", OBS_GROUP_NORMAL, updates);

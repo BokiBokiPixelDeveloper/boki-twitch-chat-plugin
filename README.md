@@ -18,7 +18,7 @@ The project is intentionally not named after one visual style. The current imple
 - Tag-driven GitHub Release baseline
 - SHA-256 release package + update manifest generation
 - Built-in update checker in OBS properties
-- Verified in-place Linux plugin update with automatic backup and restart prompt
+- Verified Linux update download staged for installation after OBS exits
 - Architecture reserved for additional render modes and web themes
 
 See `docs/ARCHITECTURE.md` for the multi-renderer direction.
@@ -138,6 +138,10 @@ The OBS source properties include an **Updates** section from the first installa
 - **Nach Updates suchen**
 - **Update installieren** when a newer compatible release is available
 
-The updater downloads the release binary, verifies its SHA-256 from `update-manifest.json`, backs up the currently loaded plugin, and replaces the on-disk `.so` atomically. OBS keeps the already loaded binary mapped until exit; the new version becomes active after a full OBS restart.
+The updater asynchronously downloads the release binary, checks its size and SHA-256 from `update-manifest.json`, and atomically stages it at `~/.cache/bokis-twitch-chat-plugin/pending/bokis-twitch-chat-plugin.so`. It then displays **Update bereit – OBS neu starten**. The loaded plugin file and installed-version display are never changed by the download.
+
+This first crash fix implements download and verification only. Restarting OBS alone does **not** install the staged file yet: fully close OBS, then install the staged binary into the existing plugin location before starting OBS again. An automatic installer/helper is not included in this fix. Existing source IDs and settings remain compatible.
+
+Property buttons request their rebuild by returning `true`; changing updater status never triggers a property rebuild. Network completion notifications use `obs_queue_task(OBS_TASK_UI, ..., false)` and ignore callbacks whose updater has already been destroyed.
 
 For unauthenticated update checks the GitHub release feed must be publicly readable. If the source repository remains private, use a separate public release/feed repository rather than embedding a GitHub personal access token in the plugin.
