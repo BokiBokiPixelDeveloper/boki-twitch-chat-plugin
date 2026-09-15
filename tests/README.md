@@ -29,3 +29,22 @@ path requires a manual source preview. Use **Emojis und Emotes testen**, then ch
 live messages containing native Twitch emotes and enabled channel emotes from all
 three providers. Also verify that existing font, lane and separate GIF settings
 continue to work after an OBS restart.
+
+## Updater regression tests
+
+`updater-tests` uses fake network replies and an OBS UI task queue stub; no live
+network, installed plugin, or real user cache is touched. It covers:
+
+- Idle → Checking → Available → Downloading → Ready and status text
+- No property notification from check/install calls; completion notifications
+  occur only when the queued OBS UI task is executed
+- Duplicate check/install suppression while busy and after staging
+- SHA-256 and size rejection, network and staging failures, download retry
+- Current, malformed and incomplete manifests
+- Atomic pending-file contents and unchanged installed version
+- Destruction with a pending UI notification
+
+A manual Linux/Qt6 OBS check is still needed for actual button widget dispatch:
+click **Nach Updates suchen**, then **Update installieren**, including repeated
+clicks and closing the properties/source while requests are pending. Confirm that
+the loaded `.so` stays unchanged and the verified file appears only in `pending`.

@@ -3,13 +3,14 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
+#include <QPointer>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QVersionNumber>
 
 #include <obs-module.h>
@@ -101,11 +102,24 @@ UpdateChecker::UpdateChecker(QString currentVersion, StateCallback stateChanged,
 
 UpdateChecker::~UpdateChecker() = default;
 
-void UpdateChecker::setStatus(QString status)
+void UpdateChecker::setStatus(State state, QString status)
 {
+    // Button callbacks request their rebuild by returning true. Never rebuild here:
+    // Qt is still dispatching mouseReleaseEvent to the existing property button.
+    state_ = state;
     status_ = std::move(status);
-    if (stateChanged_)
-        stateChanged_();
+}
+
+void UpdateChecker::notifyStateChanged()
+{
+    // Network completions must cross the OBS UI queue, even on the Qt main thread.
+    // A queued completion must not retain the source or dereference a dead checker.
+    auto *guard = new QPointer<UpdateChecker>(this);
+    obs_queue_task(OBS_TASK_UI, [](void *data) {
+        const std::unique_ptr<QPointer<UpdateChecker>> checker(static_cast<QPointer<UpdateChecker> *>(data));
+        if (*checker && (*checker)->stateChanged_)
+            (*checker)->stateChanged_();
+    }, guard, false);
 }
 
 bool UpdateChecker::isNewerVersion(const QString &candidate, const QString &current)
@@ -123,13 +137,12 @@ bool UpdateChecker::isNewerVersion(const QString &candidate, const QString &curr
 
 void UpdateChecker::checkForUpdates()
 {
-    if (busy_)
+    if (busy() || state_ == State::Ready)
         return;
 
-    busy_ = true;
     hasAvailable_ = false;
     available_ = {};
-    setStatus(QStringLiteral("Suche nach Updates …"));
+    setStatus(State::Checking, QStringLiteral("Suche nach Updates …"));
 
     QNetworkRequest request(QUrl(QString::fromLatin1(UPDATE_MANIFEST_URL)));
     request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Bokis-Twitch-Chat-Plugin/%1").arg(currentVersion_));
@@ -142,10 +155,10 @@ void UpdateChecker::checkForUpdates()
 void UpdateChecker::handleManifestReply(QNetworkReply *reply)
 {
     const auto guard = std::unique_ptr<QNetworkReply, void (*)(QNetworkReply *)>(reply, [](QNetworkReply *r) { r->deleteLater(); });
-    busy_ = false;
+    const auto notify = qScopeGuard([this] { notifyStateChanged(); });
 
     if (reply->error() != QNetworkReply::NoError) {
-        setStatus(QStringLiteral("Update-Quelle nicht erreichbar: %1. Ist das Release-Repo noch privat?")
+        setStatus(State::Error, QStringLiteral("Update-Quelle nicht erreichbar: %1. Ist das Release-Repo noch privat?")
                       .arg(reply->errorString()));
         return;
     }
@@ -153,7 +166,7 @@ void UpdateChecker::handleManifestReply(QNetworkReply *reply)
     QJsonParseError parseError;
     const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll(), &parseError);
     if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        setStatus(QStringLiteral("Ungültiges Update-Manifest"));
+        setStatus(State::Error, QStringLiteral("Ungültiges Update-Manifest"));
         return;
     }
 
@@ -165,27 +178,26 @@ void UpdateChecker::handleManifestReply(QNetworkReply *reply)
     const qint64 size = static_cast<qint64>(platform.value(QStringLiteral("size")).toDouble(-1));
 
     if (version.isEmpty() || url.isEmpty() || sha256.size() != 64) {
-        setStatus(QStringLiteral("Update-Manifest ist unvollständig"));
+        setStatus(State::Error, QStringLiteral("Update-Manifest ist unvollständig"));
         return;
     }
 
     if (!isNewerVersion(version, currentVersion_)) {
-        setStatus(QStringLiteral("Aktuell – installiert: %1").arg(currentVersion_));
+        setStatus(State::Current, QStringLiteral("Aktuell – installiert: %1").arg(currentVersion_));
         return;
     }
 
     available_ = {version, url, sha256, size};
     hasAvailable_ = true;
-    setStatus(QStringLiteral("Update verfügbar: %1 → %2").arg(currentVersion_, version));
+    setStatus(State::Available, QStringLiteral("Update verfügbar: %1 → %2").arg(currentVersion_, version));
 }
 
 void UpdateChecker::installAvailableUpdate()
 {
-    if (busy_ || !hasAvailable_)
+    if (busy() || !hasAvailable_ || state_ == State::Ready)
         return;
 
-    busy_ = true;
-    setStatus(QStringLiteral("Lade Update %1 …").arg(available_.version));
+    setStatus(State::Downloading, QStringLiteral("Lade Update %1 …").arg(available_.version));
 
     QNetworkRequest request(QUrl(available_.downloadUrl));
     request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Bokis-Twitch-Chat-Plugin/%1").arg(currentVersion_));
@@ -197,63 +209,45 @@ void UpdateChecker::installAvailableUpdate()
 void UpdateChecker::handleBinaryReply(QNetworkReply *reply)
 {
     const auto guard = std::unique_ptr<QNetworkReply, void (*)(QNetworkReply *)>(reply, [](QNetworkReply *r) { r->deleteLater(); });
-    busy_ = false;
+    const auto notify = qScopeGuard([this] { notifyStateChanged(); });
 
     if (reply->error() != QNetworkReply::NoError) {
-        setStatus(QStringLiteral("Update-Download fehlgeschlagen: %1").arg(reply->errorString()));
+        setStatus(State::Error, QStringLiteral("Update-Download fehlgeschlagen: %1").arg(reply->errorString()));
         return;
     }
 
     const QByteArray payload = reply->readAll();
     if (available_.size >= 0 && payload.size() != available_.size) {
-        setStatus(QStringLiteral("Update verworfen: Dateigröße stimmt nicht"));
+        setStatus(State::Error, QStringLiteral("Update verworfen: Dateigröße stimmt nicht"));
         return;
     }
 
     const QString actualHash = QString::fromLatin1(QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex());
     if (actualHash.compare(available_.sha256, Qt::CaseInsensitive) != 0) {
-        setStatus(QStringLiteral("Update verworfen: SHA-256 stimmt nicht"));
+        setStatus(State::Error, QStringLiteral("Update verworfen: SHA-256 stimmt nicht"));
         return;
     }
 
     QString error;
-    if (!installBinaryAtomically(payload, &error)) {
-        setStatus(QStringLiteral("Update konnte nicht installiert werden: %1").arg(error));
+    if (!stageBinaryAtomically(payload, &error)) {
+        setStatus(State::Error, QStringLiteral("Update konnte nicht bereitgestellt werden: %1").arg(error));
         return;
     }
 
     hasAvailable_ = false;
-    currentVersion_ = available_.version;
-    setStatus(QStringLiteral("Update %1 installiert. OBS jetzt vollständig neu starten.").arg(available_.version));
+    setStatus(State::Ready, QStringLiteral("Update bereit – OBS neu starten"));
 }
 
-bool UpdateChecker::installBinaryAtomically(const QByteArray &payload, QString *errorMessage)
+bool UpdateChecker::stageBinaryAtomically(const QByteArray &payload, QString *errorMessage)
 {
-    const char *binaryPathRaw = obs_get_module_binary_path(obs_current_module());
-    if (!binaryPathRaw || !*binaryPathRaw) {
-        *errorMessage = QStringLiteral("Plugin-Pfad konnte nicht ermittelt werden");
+    // Never touch the loaded module. A separate installer may consume this file
+    // only after OBS exits. Keep the filename independent of manifest input.
+    const QString pendingDir = pendingDirectory_;
+    if (!QDir().mkpath(pendingDir)) {
+        *errorMessage = QStringLiteral("Pending-Verzeichnis konnte nicht erstellt werden");
         return false;
     }
-
-    const QString binaryPath = QString::fromUtf8(binaryPathRaw);
-    const QFileInfo binaryInfo(binaryPath);
-    if (!binaryInfo.exists()) {
-        *errorMessage = QStringLiteral("Installierte Plugin-Datei wurde nicht gefunden: %1").arg(binaryPath);
-        return false;
-    }
-
-    const QString backupDir = QDir::homePath() + QStringLiteral("/.local/share/bokis-twitch-chat-plugin/backups/") + currentVersion_;
-    if (!QDir().mkpath(backupDir)) {
-        *errorMessage = QStringLiteral("Backup-Verzeichnis konnte nicht erstellt werden");
-        return false;
-    }
-
-    const QString backupPath = backupDir + QLatin1Char('/') + binaryInfo.fileName();
-    QFile::remove(backupPath);
-    if (!QFile::copy(binaryPath, backupPath)) {
-        *errorMessage = QStringLiteral("Backup der installierten Version ist fehlgeschlagen");
-        return false;
-    }
+    const QString binaryPath = pendingDir + QStringLiteral("/bokis-twitch-chat-plugin.so");
 
     QSaveFile output(binaryPath);
     output.setDirectWriteFallback(false);
@@ -267,7 +261,7 @@ bool UpdateChecker::installBinaryAtomically(const QByteArray &payload, QString *
         return false;
     }
     if (!output.commit()) {
-        *errorMessage = QStringLiteral("Atomarer Dateiaustausch ist fehlgeschlagen");
+        *errorMessage = QStringLiteral("Atomare Bereitstellung ist fehlgeschlagen");
         return false;
     }
 
