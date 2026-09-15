@@ -11,6 +11,11 @@
 #include <QNetworkReply>
 #include <QPainter>
 #include <QTest>
+#include <QTextBoundaryFinder>
+#include <QTextLayout>
+#include <QGlyphRun>
+#include <QRawFont>
+#include <cmath>
 #include <cstring>
 
 namespace {
@@ -284,7 +289,60 @@ void ChatTests::coloredUnicode_data()
 void ChatTests::coloredUnicode()
 {
     QFETCH(QString, text);
+    // All fixtures are one extended grapheme, including surrogate pairs, selectors,
+    // modifiers, regional indicators and ZWJ sequences. UTF-16 length is not glyph count.
+    QTextBoundaryFinder boundaries(QTextBoundaryFinder::Grapheme, text);
+    QCOMPARE(boundaries.toNextBoundary(), text.size());
+    QCOMPARE(boundaries.toNextBoundary(), -1);
+
+    QFont font;
+    font.setFamilies({QStringLiteral("Liberation Sans"), QStringLiteral("Noto Color Emoji")});
+    font.setPixelSize(48);
+    font.setWeight(QFont::Medium);
+    font.setStyleStrategy(QFont::PreferAntialias);
+    font.setHintingPreference(QFont::PreferFullHinting);
+    QTextLayout shaped(text, font);
+    shaped.beginLayout();
+    const auto line = shaped.createLine();
+    shaped.endLayout();
+    QVERIFY(line.isValid());
+    QVERIFY(std::isfinite(line.naturalTextWidth()));
+    QVERIFY(line.naturalTextWidth() > 0);
+    QCOMPARE(shaped.nextCursorPosition(0), text.size());
+    QCOMPARE(shaped.previousCursorPosition(text.size()), 0);
+    for (int i = 1; i < text.size(); ++i)
+        QVERIFY(!shaped.isValidCursorPosition(i));
+
+    // Registration alone does not prove which fallback face Qt actually shaped with.
+    const QRawFont bundled(QStringLiteral(":/bokis-twitch-chat-plugin/fonts/NotoColorEmoji.ttf"),
+                           48, QFont::PreferFullHinting);
+    QVERIFY(bundled.isValid());
+    const auto runs = shaped.glyphRuns();
+    QCOMPARE(runs.size(), 1);
+    const auto &run = runs.first();
+    QCOMPARE(run.rawFont().familyName(), bundled.familyName());
+    for (const char *table : {"head", "cmap", "GSUB"}) {
+        QVERIFY(!bundled.fontTable(table).isEmpty());
+        QCOMPARE(run.rawFont().fontTable(table), bundled.fontTable(table));
+    }
+    // These particular bundled-font sequences must shape to one real glyph.
+    QCOMPARE(run.glyphIndexes().size(), 1);
+    QVERIFY(run.glyphIndexes().first() != 0);
+
     const auto layout = layoutMessage({{}, text, Qt::white}, QStringLiteral("Liberation Sans"), 500, 48, 2.5);
+    QVERIFY(!layout.text.isNull());
+    QVERIFY(layout.text.size().isValid());
+    QCOMPARE(layout.text.format(), QImage::Format_RGBA8888);
+    QVERIFY(layout.emotes.empty());
+
+    // Adjacent text fragments must not break a grapheme. Compare the complete raster
+    // using the same environment, rather than imposing a font-dependent pixel width.
+    ChatMessage fragmented{{}, text, Qt::white};
+    for (const char32_t codepoint : text.toUcs4())
+        fragmented.fragments.push_back({ChatFragment::Type::Text, QString::fromUcs4(&codepoint, 1)});
+    const auto joined = layoutMessage(fragmented, QStringLiteral("Liberation Sans"), 500, 48, 2.5);
+    QCOMPARE(joined.text, layout.text);
+
     int coloredPixels = 0;
     int visiblePixels = 0;
     for (int y = 0; y < layout.text.height(); ++y) {
@@ -301,7 +359,8 @@ void ChatTests::coloredUnicode()
     if (text != QStringLiteral("👀") && text != QStringLiteral("👨‍👩‍👧‍👦"))
         QVERIFY2(coloredPixels > 20, qPrintable(QStringLiteral("No color pixels for %1").arg(text)));
     QVERIFY(visiblePixels > 400);
-    QVERIFY(layout.text.width() < 160); // sequence must be shaped as one glyph, not split
+    // Total image width also contains the username separator and document margins;
+    // it cannot establish whether the emoji was shaped as a single unit.
 }
 
 void ChatTests::inlineLayoutAndOverlay()
