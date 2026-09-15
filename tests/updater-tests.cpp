@@ -10,6 +10,7 @@
 #include <QtTest>
 #include <obs.h>
 #include <cstring>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -59,7 +60,7 @@ protected:
         return last;
     }
 };
-const QByteArray binary("verified test plugin");
+const QByteArray binary("\x7f" "ELFverified test plugin");
 QByteArray manifest(QString version = QStringLiteral("2.0.0"))
 {
     return QJsonDocument(QJsonObject{
@@ -92,6 +93,8 @@ private Q_SLOTS:
         auto *net = network.get();
         checker.network_ = std::move(network);
         checker.pendingDirectory_ = dir.path() + "/pending";
+        checker.targetPath_ = dir.path() + "/bokis-twitch-chat-plugin.so";
+        checker.launcher_ = [](const QString &, const QString &, int fd, QString &) { return fd >= 0; };
         QCOMPARE(checker.state(), UpdateChecker::State::Idle);
         checker.installAvailableUpdate();
         QCOMPARE(net->requests, 0);
@@ -118,7 +121,7 @@ private Q_SLOTS:
         QCOMPARE(net->requests, 2);
         net->last->complete(binary);
         QCOMPARE(checker.state(), UpdateChecker::State::Ready);
-        QCOMPARE(checker.status(), QStringLiteral("Update bereit – OBS neu starten"));
+        QCOMPARE(checker.status(), QStringLiteral("Update bereit – OBS vollständig schließen. Die Installation erfolgt automatisch nach dem Beenden."));
         QVERIFY(!checker.busy());
         QVERIFY(!checker.hasAvailableUpdate());
         QCOMPARE(checker.currentVersion_, QStringLiteral("1.0.0"));
@@ -148,23 +151,161 @@ private Q_SLOTS:
         auto *net = network.get();
         checker.network_ = std::move(network);
         checker.pendingDirectory_ = dir.path() + "/pending";
+        checker.targetPath_ = dir.path() + "/bokis-twitch-chat-plugin.so";
+        checker.launcher_ = [](const QString &, const QString &, int fd, QString &) { return fd >= 0; };
         checker.checkForUpdates();
         net->last->complete(manifest());
         drainUi();
         checker.installAvailableUpdate();
         if (failure == 3) {
-            QFile blocker(checker.pendingDirectory_);
-            QVERIFY(blocker.open(QIODevice::WriteOnly));
+            QFile blocker(checker.pendingDirectory_ + "/bokis-twitch-chat-plugin.so");
+            QVERIFY(QDir().mkpath(blocker.fileName()));
         }
         net->last->complete(failure == 1 ? QByteArray("short") : failure == 2 ? QByteArray(binary.size(), 'x') : binary,
                             failure == 0);
         QCOMPARE(checker.state(), UpdateChecker::State::Error);
         QVERIFY(!checker.busy());
         QVERIFY(checker.hasAvailableUpdate());
-        QVERIFY(!QFile::exists(checker.pendingDirectory_ + "/bokis-twitch-chat-plugin.so"));
+        if (failure != 3) QVERIFY(!QFile::exists(checker.pendingDirectory_ + "/bokis-twitch-chat-plugin.so"));
         checker.installAvailableUpdate();
         QCOMPARE(checker.state(), UpdateChecker::State::Downloading);
         QCOMPARE(net->requests, 3);
+    }
+    void pairedDownload_data()
+    {
+        QTest::addColumn<int>("failure");
+        QTest::newRow("both-verified") << -1;
+        QTest::newRow("helper-network") << 0;
+        QTest::newRow("helper-size") << 1;
+        QTest::newRow("helper-hash") << 2;
+        QTest::newRow("helper-not-elf") << 3;
+        QTest::newRow("helper-staging") << 4;
+    }
+    void pairedDownload()
+    {
+        QFETCH(int, failure);
+        QTemporaryDir dir;
+        const QByteArray helper = failure == 3 ? QByteArray("invalid helper") : QByteArray("\x7f" "ELFverified helper");
+        auto object = QJsonDocument::fromJson(manifest()).object();
+        auto platforms = object["platforms"].toObject();
+        auto linux = platforms["linux-x86_64"].toObject();
+        linux["helper"] = QJsonObject{{"url", "https://example.invalid/helper.bin"}, {"size", helper.size()},
+            {"sha256", QString::fromLatin1(QCryptographicHash::hash(helper, QCryptographicHash::Sha256).toHex())}};
+        platforms["linux-x86_64"] = linux; object["platforms"] = platforms;
+        UpdateChecker checker("1.0.0", [] {});
+        checker.pendingDirectory_ = dir.path() + "/pending";
+        checker.targetPath_ = dir.path() + "/bokis-twitch-chat-plugin.so";
+        checker.network_ = std::make_unique<Network>();
+        int launches = 0;
+        checker.launcher_ = [&](const QString &, const QString &, int fd, QString &) { ++launches; return fd >= 0; };
+        auto *net = static_cast<Network *>(checker.network_.get());
+        checker.checkForUpdates(); net->last->complete(QJsonDocument(object).toJson());
+        checker.installAvailableUpdate(); net->last->complete(binary);
+        QCOMPARE(checker.state(), UpdateChecker::State::Downloading);
+        QCOMPARE(launches, 0);
+        QCOMPARE(net->requests, 3);
+        QVERIFY(!QFile::exists(checker.pendingDirectory_ + "/pending.json"));
+        QCOMPARE(postexit::acquireLock(checker.pendingDirectory_ + "/update.lock"), -1);
+        checker.installAvailableUpdate(); checker.checkForUpdates();
+        QCOMPARE(net->requests, 3);
+        if (failure == 4) QVERIFY(QDir().mkpath(checker.pendingDirectory_ + "/bokis-twitch-chat-updater"));
+        net->last->complete(failure == 1 ? helper + "x" : failure == 2 ? QByteArray(helper.size(), 'x') : helper, failure == 0);
+        if (failure == -1) {
+            QCOMPARE(checker.state(), UpdateChecker::State::Ready);
+            QCOMPARE(launches, 1);
+            const auto pending = postexit::readPending(checker.pendingDirectory_);
+            QVERIFY(pending.helper.has_value());
+            QCOMPARE(pending.helper->size, helper.size());
+            QFile file(pending.helper->binary); QVERIFY(file.open(QIODevice::ReadOnly));
+            QCOMPARE(file.readAll(), helper);
+        } else {
+            QCOMPARE(checker.state(), UpdateChecker::State::Error);
+            QCOMPARE(launches, 0);
+            QVERIFY(!QFile::exists(checker.pendingDirectory_ + "/pending.json"));
+            QVERIFY(!QFile::exists(checker.pendingDirectory_ + "/bokis-twitch-chat-plugin.so"));
+            checker.installAvailableUpdate();
+            QCOMPARE(checker.state(), UpdateChecker::State::Downloading);
+            QCOMPARE(net->requests, 4);
+        }
+    }
+    void malformedHelper()
+    {
+        for (const auto &helper : {QJsonValue(QJsonValue::Null), QJsonValue(QJsonObject{}),
+            QJsonValue(QJsonObject{{"url", "file:///tmp/helper"}, {"sha256", QString(64, 'a')}, {"size", 123}}),
+            QJsonValue(QJsonObject{{"url", "https://example.invalid/helper"}, {"sha256", QString(64, 'z')}, {"size", 123}})}) {
+            auto object = QJsonDocument::fromJson(manifest()).object();
+            auto platforms = object["platforms"].toObject();
+            auto linux = platforms["linux-x86_64"].toObject();
+            linux["helper"] = helper; platforms["linux-x86_64"] = linux; object["platforms"] = platforms;
+            UpdateChecker checker("1.0.0", [] {});
+            checker.network_ = std::make_unique<Network>();
+            checker.checkForUpdates();
+            static_cast<Network *>(checker.network_.get())->last->complete(QJsonDocument(object).toJson());
+            QCOMPARE(checker.state(), UpdateChecker::State::Error);
+            QVERIFY(!checker.hasAvailableUpdate());
+        }
+    }
+    void concurrentDownloadAndPending()
+    {
+        QTemporaryDir dir;
+        UpdateChecker first("1.0.0", [] {}), second("1.0.0", [] {});
+        int launches = 0;
+        int inheritedLock = -1;
+        for (auto *checker : {&first, &second}) {
+            checker->pendingDirectory_ = dir.path() + "/pending";
+            checker->targetPath_ = dir.path() + "/bokis-twitch-chat-plugin.so";
+            checker->network_ = std::make_unique<Network>();
+            checker->launcher_ = [&](const QString &, const QString &, int fd, QString &) {
+                ++launches;
+                inheritedLock = dup(fd);
+                return inheritedLock >= 0;
+            };
+            checker->checkForUpdates();
+            static_cast<Network *>(checker->network_.get())->last->complete(manifest());
+        }
+        first.installAvailableUpdate();
+        second.installAvailableUpdate();
+        QCOMPARE(static_cast<Network *>(second.network_.get())->requests, 1);
+        static_cast<Network *>(first.network_.get())->last->complete(binary);
+        second.installAvailableUpdate();
+        QCOMPARE(second.state(), UpdateChecker::State::Ready);
+        QCOMPARE(launches, 1);
+        QVERIFY(QFile::exists(first.pendingDirectory_ + "/pending.json"));
+        close(inheritedLock);
+    }
+    void helperFailurePreservesPending()
+    {
+        QTemporaryDir dir;
+        UpdateChecker checker("1.0.0", [] {});
+        checker.pendingDirectory_ = dir.path() + "/pending";
+        checker.targetPath_ = dir.path() + "/bokis-twitch-chat-plugin.so";
+        checker.network_ = std::make_unique<Network>();
+        auto *net = static_cast<Network *>(checker.network_.get());
+        checker.launcher_ = [](const QString &, const QString &, int, QString &error) {
+            error = "missing executable"; return false;
+        };
+        checker.checkForUpdates(); net->last->complete(manifest());
+        checker.installAvailableUpdate(); net->last->complete(binary);
+        QCOMPARE(checker.state(), UpdateChecker::State::Error);
+        QVERIFY(QFile::exists(checker.pendingDirectory_ + "/pending.json"));
+        checker.checkForUpdates();
+        QCOMPARE(net->requests, 2);
+        QVERIFY(checker.status().contains("missing executable"));
+    }
+    void resultSurvivesAutomaticCheck()
+    {
+        const auto path = postexit::stateDirectory() + "/last-update-result.json";
+        QVERIFY(QDir().mkpath(postexit::stateDirectory()));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(R"({"success":true,"fromVersion":"1.0","toVersion":"2.0","timestamp":"2026-01-01T00:00:00Z"})");
+        file.close();
+        UpdateChecker checker("2.0", [] {});
+        checker.network_ = std::make_unique<Network>();
+        QVERIFY(checker.status().contains("Update auf 2.0 erfolgreich installiert."));
+        checker.checkForUpdates();
+        QVERIFY(checker.status().contains("Update auf 2.0 erfolgreich installiert."));
+        QVERIFY(!QFile::exists(path));
     }
     void manifestResults_data()
     {
@@ -197,5 +338,13 @@ private Q_SLOTS:
         QCOMPARE(notifications, 0);
     }
 };
-QTEST_GUILESS_MAIN(UpdateCheckerTests)
+int main(int argc, char **argv)
+{
+    QCoreApplication app(argc, argv);
+    QTemporaryDir isolated;
+    qputenv("XDG_CACHE_HOME", isolated.path().toUtf8());
+    qputenv("XDG_STATE_HOME", isolated.path().toUtf8());
+    UpdateCheckerTests tests;
+    return QTest::qExec(&tests, argc, argv);
+}
 #include "updater-tests.moc"
