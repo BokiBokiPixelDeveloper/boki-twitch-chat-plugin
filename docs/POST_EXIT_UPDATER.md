@@ -78,7 +78,11 @@ No version number is changed by this feature.
    common commit marker, then its directory is fsynced. No installed file is touched.
 4. OBS opens a `pidfd` for **itself**, before forking. The helper inherits this exact
    process handle and the same lock file description. PID and `/proc/PID/stat`
-   field 22 (start ticks) are also passed as separate arguments.
+   field 22 (start ticks) are also passed as separate arguments. An `O_PATH` descriptor
+   for `/proc/self/exe` is captured before forking and inherited by the helper, keeping
+   the originating executable's device/inode available after exit. Legacy helper
+   invocations without that descriptor require the original PID/start ticks to still
+   match while its executable is captured.
 5. `fork` / `setsid` / second `fork` / `execv` detach the currently installed helper.
    A close-on-exec pipe reports exec errors; the intermediate child is reaped.
    No shell is used. Standard streams go to `/dev/null`, the working directory
@@ -88,10 +92,14 @@ No version number is changed by this feature.
    process exited; unreadable procfs without ESRCH fails closed. OBS is never killed.
 7. After exit, acquire the exclusive `.so.use.lock` (held shared by cooperating
    plugin processes), reread metadata, and verify **all** payloads again. Scan
-   `/proc/*/maps` initially and immediately before each swap. Compare device and
-   inode to the target `.so`, including aliases/hardlinks, rather than process names.
-   Any matching mapping aborts with the PID in the error. Unreadable maps for a live
-   same-user process abort conservatively; inaccessible other-user processes are skipped.
+   `/proc` initially and immediately before each swap. First classify OBS candidates
+   by `/proc/PID/exe`: matching executable device/inode or canonical path, never just
+   the process name or UID. Only these candidates undergo strict maps checks.
+   Compare mapping device/inode to the target `.so`, including aliases/hardlinks.
+   A match or unreadable maps for an identified live OBS candidate aborts with its PID.
+   Non-candidates cannot block installation through maps permission failures.
+   Pin each proc directory and recheck start ticks/liveness after reading maps;
+   exited processes (ENOENT/ESRCH), zombies, and changed start ticks are skipped.
 8. Prepare **all** backups, candidates, and local rollback hardlinks before any swap.
    Backups get unique UTC timestamp/UUID names under the XDG data directory.
    Candidates are copied beside each target, chmod 0755, fsynced, and reverified.
@@ -193,9 +201,10 @@ pruned. No automatic rollback based on OBS startup health is implemented.
   No sudo, daemon, systemd unit, OBS termination, or automatic restart.
 - Close all OBS instances and wait for the result before restarting. The use-lock
   protects cooperating instances after module initialization, and the maps scan
-  also catches older/non-cooperating instances. OBS's loader does not participate
+  also catches older/non-cooperating instances with a matching executable identity. OBS's loader does not participate
   in this lock, so a new mapping can still race the final check. Process namespaces,
-  procfs restrictions, and inaccessible other-user processes limit visibility. The originating OBS
+  procfs restrictions, unidentifiable executables, and other OBS executable paths/inodes
+  limit visibility. The originating OBS
   process is always awaited, even if its source is deleted early.
 - Session managers that kill every user process at logout can also kill the helper.
   Power loss between rename and state cleanup can leave a pending update for retry.
