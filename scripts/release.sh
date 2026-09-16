@@ -2,28 +2,28 @@
 set -euo pipefail
 
 die() {
-  printf 'Fehler: %s\n' "$*" >&2
+  printf 'Error: %s\n' "$*" >&2
   exit 1
 }
 
-[[ $# -eq 1 ]] || die "Aufruf: $0 <version>"
+[[ $# -eq 1 ]] || die "Usage: $0 <version>"
 version=$1
 # SemVer without build metadata; numeric identifiers must not have leading zeros.
 number='(0|[1-9][0-9]*)'
 identifier='(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
 [[ $version =~ ^$number\.$number\.$number(-$identifier(\.$identifier)*)?$ ]] ||
-  die "Ungültige Version: $version (Beispiel: 0.1.0-alpha.10)"
+  die "Invalid version: $version (example: 0.1.0-alpha.10)"
 tag="v$version"
 
-root=$(git rev-parse --show-toplevel) || die 'Kein Git-Repository.'
+root=$(git rev-parse --show-toplevel) || die 'Not a Git repository.'
 cd "$root"
-[[ $(git branch --show-current) == main ]] || die 'Releases sind nur von main erlaubt.'
+[[ $(git branch --show-current) == main ]] || die 'Releases are only allowed from main.'
 require_clean() {
   local changes
   changes=$(git status --porcelain)
   if [[ -n $changes ]]; then
     printf '%s\n' "$changes" >&2
-    die 'Der Working Tree muss sauber sein (auch keine untracked Dateien).'
+    die 'The working tree must be clean, including untracked files.'
   fi
 }
 require_clean
@@ -31,14 +31,14 @@ git pull --ff-only
 require_clean
 
 if git show-ref --verify --quiet "refs/tags/$tag"; then
-  die "Tag $tag existiert bereits lokal."
+  die "Tag $tag already exists locally."
 fi
 # Do not interpret a failed remote query as an absent tag.
 remote_tag=$(git ls-remote --tags origin "refs/tags/$tag")
-[[ -z $remote_tag ]] || die "Tag $tag existiert bereits auf origin."
+[[ -z $remote_tag ]] || die "Tag $tag already exists on origin."
 git ls-files --error-unmatch -- VERSION buildspec.json >/dev/null
 [[ -f VERSION && ! -L VERSION && -f buildspec.json && ! -L buildspec.json ]] ||
-  die 'VERSION und buildspec.json müssen reguläre Dateien sein.'
+  die 'VERSION and buildspec.json must be regular files.'
 
 backup=$(mktemp -d)
 restore=false
@@ -54,7 +54,7 @@ cleanup() {
   fi
   rm -rf -- "$backup"
   if (( status != 0 )) && [[ $committed == true ]]; then
-    printf 'Abbruch nach dem Commit. Commit/Push/Tag-Stand bitte manuell prüfen; nichts wurde zurückgesetzt.\n' >&2
+    printf 'Stopped after the commit. Check the commit, push, and tag state manually; nothing was reset.\n' >&2
   fi
   exit "$status"
 }
@@ -75,19 +75,19 @@ awk -v version="$version" '
   { print }
   END { if (count != 1) exit 1 }
 ' buildspec.json > "$backup/buildspec.new" ||
-  die 'Projektversion in buildspec.json nicht eindeutig im erwarteten Format gefunden.'
+  die 'The project version in buildspec.json was not found unambiguously in the expected format.'
 
 restore=true
 printf '%s\n' "$version" > VERSION
 cat "$backup/buildspec.new" > buildspec.json
 git --no-pager diff -- VERSION buildspec.json
 if git diff --quiet -- VERSION buildspec.json; then
-  die 'Die Versionsdateien enthalten bereits diese Version.'
+  die 'The version files already contain this version.'
 fi
-printf 'Release %s erstellen? [y/N] ' "$tag"
+printf 'Create release %s? [y/N] ' "$tag"
 answer=''
 if ! IFS= read -r answer || [[ $answer != y && $answer != Y ]]; then
-  printf '\nRelease abgebrochen; Versionsdateien werden wiederhergestellt.\n'
+  printf '\nRelease canceled; restoring version files.\n'
   exit 1
 fi
 
@@ -97,5 +97,5 @@ committed=true
 git push
 git tag "$tag"
 git push origin "$tag"
-printf '\nRelease %s wurde gepusht.\n' "$tag"
-printf 'GitHub Actions sollte jetzt Build, Tests, Packaging und Veröffentlichung übernehmen.\n'
+printf '\nRelease %s was pushed.\n' "$tag"
+printf 'GitHub Actions should now handle the build, tests, packaging, and publication.\n'

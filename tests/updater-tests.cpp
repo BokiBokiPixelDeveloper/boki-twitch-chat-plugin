@@ -101,7 +101,7 @@ private Q_SLOTS:
         checker.checkForUpdates();
         QCOMPARE(checker.state(), UpdateChecker::State::Checking);
         QVERIFY(checker.busy());
-        QVERIFY(checker.status().startsWith("Suche"));
+        QVERIFY(checker.status().startsWith("Checking"));
         QCOMPARE(notifications, 0);
         QVERIFY(tasks.empty()); // No synchronous or queued rebuild from the button.
         checker.checkForUpdates();
@@ -114,14 +114,14 @@ private Q_SLOTS:
         QCOMPARE(notifications, 1);
         checker.installAvailableUpdate();
         QCOMPARE(checker.state(), UpdateChecker::State::Downloading);
-        QVERIFY(checker.status().startsWith("Lade"));
+        QVERIFY(checker.status().startsWith("Downloading"));
         QVERIFY(tasks.empty());
         checker.installAvailableUpdate();
         checker.checkForUpdates();
         QCOMPARE(net->requests, 2);
         net->last->complete(binary);
         QCOMPARE(checker.state(), UpdateChecker::State::Ready);
-        QCOMPARE(checker.status(), QStringLiteral("Update bereit – OBS vollständig schließen. Die Installation erfolgt automatisch nach dem Beenden."));
+        QCOMPARE(checker.status(), QStringLiteral("Update ready – close OBS completely. Installation will start automatically after it exits."));
         QVERIFY(!checker.busy());
         QVERIFY(!checker.hasAvailableUpdate());
         QCOMPARE(checker.currentVersion_, QStringLiteral("1.0.0"));
@@ -302,9 +302,9 @@ private Q_SLOTS:
         file.close();
         UpdateChecker checker("2.0", [] {});
         checker.network_ = std::make_unique<Network>();
-        QVERIFY(checker.status().contains("Update auf 2.0 erfolgreich installiert."));
+        QVERIFY(checker.status().contains("Update to 2.0 installed successfully."));
         checker.checkForUpdates();
-        QVERIFY(checker.status().contains("Update auf 2.0 erfolgreich installiert."));
+        QVERIFY(checker.status().contains("Update to 2.0 installed successfully."));
         QVERIFY(!QFile::exists(path));
     }
     void manifestResults_data()

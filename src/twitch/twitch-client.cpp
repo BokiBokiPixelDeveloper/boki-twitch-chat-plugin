@@ -39,11 +39,11 @@ TwitchClient::TwitchClient(MessageCallback onMessage, GifCallback onGif, StatusC
     QObject::connect(&socket_, &QWebSocket::textMessageReceived,
                      [&](const QString &msg) { handleEventSubMessage(msg); });
     QObject::connect(&socket_, &QWebSocket::connected, [&]() {
-        setStatus(QStringLiteral("EventSub verbunden – warte auf Session"));
+        setStatus(QStringLiteral("EventSub connected – waiting for session"));
     });
     QObject::connect(&socket_, &QWebSocket::disconnected, [&]() {
         if (!accessToken_.isEmpty())
-            setStatus(QStringLiteral("EventSub getrennt"));
+            setStatus(QStringLiteral("EventSub disconnected"));
     });
 }
 
@@ -93,11 +93,11 @@ QNetworkRequest TwitchClient::apiRequest(const QUrl &url) const
 void TwitchClient::startOrResume()
 {
     if (clientId_.isEmpty()) {
-        setStatus(QStringLiteral("Client ID fehlt"));
+        setStatus(QStringLiteral("Client ID is missing"));
         return;
     }
     if (accessToken_.isEmpty()) {
-        setStatus(QStringLiteral("Nicht authentifiziert – 'Mit Twitch verbinden' klicken"));
+        setStatus(QStringLiteral("Not authenticated – click 'Connect to Twitch'"));
         return;
     }
     validateToken();
@@ -106,7 +106,7 @@ void TwitchClient::startOrResume()
 void TwitchClient::beginDeviceFlow()
 {
     if (clientId_.isEmpty()) {
-        setStatus(QStringLiteral("Client ID fehlt"));
+        setStatus(QStringLiteral("Client ID is missing"));
         return;
     }
 
@@ -126,7 +126,7 @@ void TwitchClient::beginDeviceFlow()
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         reply->deleteLater();
         if (status < 200 || status >= 300) {
-            setStatus(QStringLiteral("Device-Login fehlgeschlagen: %1").arg(jsonErrorMessage(bytes)));
+            setStatus(QStringLiteral("Device login failed: %1").arg(jsonErrorMessage(bytes)));
             return;
         }
 
@@ -137,11 +137,11 @@ void TwitchClient::beginDeviceFlow()
         devicePollIntervalMs_ = qMax(1000, json.value(QStringLiteral("interval")).toInt(5) * 1000);
 
         if (deviceCode_.isEmpty() || !verifyUrl.isValid()) {
-            setStatus(QStringLiteral("Ungültige Device-Login-Antwort von Twitch"));
+            setStatus(QStringLiteral("Invalid device login response from Twitch"));
             return;
         }
 
-        setStatus(QStringLiteral("Twitch freigeben – Code %1").arg(userCode));
+        setStatus(QStringLiteral("Authorize Twitch – code %1").arg(userCode));
         QDesktopServices::openUrl(verifyUrl);
         devicePollTimer_.start(devicePollIntervalMs_);
         pollDeviceToken();
@@ -184,7 +184,7 @@ void TwitchClient::pollDeviceToken()
         }
 
         devicePollTimer_.stop();
-        setStatus(QStringLiteral("Device-Token fehlgeschlagen: %1").arg(message));
+        setStatus(QStringLiteral("Device token request failed: %1").arg(message));
     });
 }
 
@@ -193,7 +193,7 @@ void TwitchClient::finishAuthFromTokenResponse(const QJsonObject &json)
     const QString access = json.value(QStringLiteral("access_token")).toString();
     const QString refresh = json.value(QStringLiteral("refresh_token")).toString();
     if (access.isEmpty()) {
-        setStatus(QStringLiteral("Twitch lieferte keinen Access Token"));
+        setStatus(QStringLiteral("Twitch did not return an access token"));
         return;
     }
     accessToken_ = access;
@@ -220,7 +220,7 @@ void TwitchClient::validateToken()
             return;
         }
         if (status < 200 || status >= 300) {
-            setStatus(QStringLiteral("Token-Validierung fehlgeschlagen: %1").arg(jsonErrorMessage(bytes)));
+            setStatus(QStringLiteral("Token validation failed: %1").arg(jsonErrorMessage(bytes)));
             return;
         }
 
@@ -228,7 +228,7 @@ void TwitchClient::validateToken()
         userId_ = json.value(QStringLiteral("user_id")).toString();
         userLogin_ = json.value(QStringLiteral("login")).toString();
         if (userId_.isEmpty()) {
-            setStatus(QStringLiteral("Token enthält keine Twitch User-ID"));
+            setStatus(QStringLiteral("Token does not contain a Twitch user ID"));
             return;
         }
         if (channelLogin_.isEmpty())
@@ -241,7 +241,7 @@ void TwitchClient::refreshAccessToken()
 {
     if (refreshToken_.isEmpty()) {
         accessToken_.clear();
-        setStatus(QStringLiteral("Twitch-Login abgelaufen – neu verbinden"));
+        setStatus(QStringLiteral("Twitch login expired – reconnect"));
         return;
     }
 
@@ -262,7 +262,7 @@ void TwitchClient::refreshAccessToken()
             refreshToken_.clear();
             if (onTokens_)
                 onTokens_({}, {});
-            setStatus(QStringLiteral("Token-Refresh fehlgeschlagen – neu verbinden"));
+            setStatus(QStringLiteral("Token refresh failed – reconnect"));
             return;
         }
         finishAuthFromTokenResponse(parseObject(bytes));
@@ -282,13 +282,13 @@ void TwitchClient::resolveBroadcaster()
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         reply->deleteLater();
         if (status < 200 || status >= 300) {
-            setStatus(QStringLiteral("Kanalauflösung fehlgeschlagen: %1").arg(jsonErrorMessage(bytes)));
+            setStatus(QStringLiteral("Channel lookup failed: %1").arg(jsonErrorMessage(bytes)));
             return;
         }
 
         const auto data = parseObject(bytes).value(QStringLiteral("data")).toArray();
         if (data.isEmpty()) {
-            setStatus(QStringLiteral("Twitch-Kanal nicht gefunden: %1").arg(channelLogin_));
+            setStatus(QStringLiteral("Twitch channel not found: %1").arg(channelLogin_));
             return;
         }
         broadcasterId_ = data.first().toObject().value(QStringLiteral("id")).toString();
@@ -301,7 +301,7 @@ void TwitchClient::connectEventSub(const QUrl &url)
 {
     if (socket_.state() != QAbstractSocket::UnconnectedState)
         socket_.close();
-    setStatus(QStringLiteral("Verbinde EventSub…"));
+    setStatus(QStringLiteral("Connecting to EventSub…"));
     socket_.open(url);
 }
 
@@ -313,7 +313,7 @@ void TwitchClient::handleEventSubMessage(const QString &payload)
 
     if (type == QStringLiteral("session_welcome")) {
         const QString sessionId = data.value(QStringLiteral("session")).toObject().value(QStringLiteral("id")).toString();
-        setStatus(QStringLiteral("EventSub aktiv – abonniere Chat"));
+        setStatus(QStringLiteral("EventSub active – subscribing to chat"));
         subscribeChat(sessionId);
         return;
     }
@@ -372,10 +372,10 @@ void TwitchClient::subscribeChat(const QString &sessionId)
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         reply->deleteLater();
         if (status != 202) {
-            setStatus(QStringLiteral("Chat-Abo fehlgeschlagen: %1").arg(jsonErrorMessage(bytes)));
+            setStatus(QStringLiteral("Chat subscription failed: %1").arg(jsonErrorMessage(bytes)));
             return;
         }
-        setStatus(QStringLiteral("Verbunden als %1 → #%2").arg(userLogin_, channelLogin_));
+        setStatus(QStringLiteral("Connected as %1 → #%2").arg(userLogin_, channelLogin_));
     });
 }
 

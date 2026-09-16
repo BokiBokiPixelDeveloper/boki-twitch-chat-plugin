@@ -60,7 +60,7 @@ upstream revision are in `resources/fonts/`. This adds about 10 MiB to the plugi
 Building now requires **Qt 6.9+** for modern emoji shaping and **libwebp** for WebP
 decoding; the Arch bootstrap and CI install the dependencies.
 
-In OBS source properties, use **Nachrichten → Emojis und Emotes testen** to display
+In OBS source properties, use **Messages → Test emojis and emotes** to display
 Unicode emoji plus a static and animated sample without Twitch access. Live Twitch
 emotes and provider catalogs require an internet connection. Cheermotes, personal
 7TV emote sets and provider-specific CSS/mask effects are not implemented.
@@ -154,10 +154,10 @@ The OBS source properties include an **Updates** section from the first installa
 
 - current version
 - automatic update check on startup
-- **Nach Updates suchen**
-- **Update installieren** when a newer compatible release is available
+- **Check for updates**
+- **Install update** when a newer compatible release is available
 
-The updater asynchronously downloads the release binary, checks its mandatory size and SHA-256 from `update-manifest.json`, and atomically stages it in `$XDG_CACHE_HOME/bokis-twitch-chat-plugin/pending` (default `~/.cache/...`). It persists `pending.json` before starting the installed `bokis-twitch-chat-updater` helper. The UI displays **Update bereit – OBS vollständig schließen. Die Installation erfolgt automatisch nach dem Beenden.**
+The updater asynchronously downloads the release binary, checks its mandatory size and SHA-256 from `update-manifest.json`, and atomically stages it in `$XDG_CACHE_HOME/bokis-twitch-chat-plugin/pending` (default `~/.cache/...`). It persists `pending.json` before starting the installed `bokis-twitch-chat-updater` helper. The UI displays **Update ready – close OBS completely. Installation will start automatically after it exits.**
 
 The detached Linux helper waits for the originating OBS process to exit, verifies the pending binary again, creates a durable backup, and atomically replaces the plugin using a temporary file in the plugin directory. Fully close OBS and wait for `last-update-result.json` before opening OBS again. The next source initialization consumes this result and displays it alongside subsequent update status. Source IDs, settings, and renderer behavior remain compatible.
 
