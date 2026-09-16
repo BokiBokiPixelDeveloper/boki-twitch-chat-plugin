@@ -20,7 +20,7 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm git cmake ninja obs-studio qt6-base qt6-websockets libwebp zip
+          pacman -S --noconfirm git cmake ninja obs-studio qt6-base qt6-websockets libwebp python zip
 
       - name: Checkout
         uses: actions/checkout@v4
