@@ -1,5 +1,8 @@
 # Tests
 
+On Linux, the installer/package tests also require Python 3 and `zip` (test-time
+dependencies only). CI installs them before configuring.
+
 ```bash
 cmake --preset linux-x86_64 -DENABLE_TESTS=ON
 cmake --build --preset linux-x86_64
@@ -80,3 +83,20 @@ A manual Linux/Qt6 OBS check is still needed for actual button widget dispatch:
 click **Check for updates**, then **Install update**, including repeated
 clicks and closing the properties/source while requests are pending. Confirm that
 the loaded `.so` stays unchanged and the verified file appears only in `pending`.
+
+## Linux installer tests
+
+`linux-installer-tests` runs the release installer with disposable HOME/XDG
+directories, runtime/process command stubs and real filesystem locks. It covers
+install/reinstall/uninstall, preservation of settings and unknown files, persistent
+lock identity, corrupt/missing payloads, path traversal and symlinks, incompatible
+runtime/CPU, active OBS/updaters, pending journals, relative XDG fallback, rollback
+after partial replacement/removal and staged corruption. It also packages the real
+built binaries, verifies downloadable checksum files, extracts the ZIP and exercises
+installation/removal from that archive. CI's root container drops to an unprivileged
+UID for installation tests after checking the root refusal.
+
+Runtime stubs let these cases run offline without launching OBS. A real
+`bash install.sh --check` and an OBS launch on each supported distribution remain
+necessary to validate release compatibility. Tests never install into a real user
+profile or stop a running OBS process.

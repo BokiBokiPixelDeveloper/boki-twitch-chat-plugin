@@ -21,3 +21,12 @@ target_compile_definitions(post-exit-tests PRIVATE HELPER_PATH="$<TARGET_FILE:bo
 add_dependencies(post-exit-tests bokis-twitch-chat-updater)
 add_test(NAME post-exit-tests COMMAND post-exit-tests)
 set_tests_properties(post-exit-tests PROPERTIES TIMEOUT 30)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    find_program(ZIP_EXECUTABLE zip REQUIRED)
+    add_test(NAME linux-installer-tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/linux-installer-tests.py
+            ${PROJECT_SOURCE_DIR} $<TARGET_FILE_DIR:bokis-twitch-chat-plugin>)
+    set_tests_properties(linux-installer-tests PROPERTIES TIMEOUT 120)
+endif()

@@ -65,6 +65,23 @@ Unicode emoji plus a static and animated sample without Twitch access. Live Twit
 emotes and provider catalogs require an internet connection. Cheermotes, personal
 7TV emote sets and provider-specific CSS/mask effects are not implemented.
 
+## Install a Linux release
+
+Download the **Linux x86_64 ZIP** and its `.zip.sha256` from GitHub Releases,
+verify the archive, extract it, and close OBS. Open a terminal in the extracted
+folder and run:
+
+```bash
+bash install.sh
+```
+
+No build or sudo is needed. The package installs the plugin, updater helper and
+license into your user OBS plugin directory. It supports native OBS **32.x** with
+libraries compatible with the Arch-built release; Flatpak, Snap and portable OBS
+need separate packaging. `bash install.sh --check` checks the package/runtime
+without installing. See [Linux installation](docs/INSTALL_LINUX.md) for verification,
+requirements, reinstalling, uninstalling and recovery.
+
 ## Local Arch development
 
 Install dependencies:

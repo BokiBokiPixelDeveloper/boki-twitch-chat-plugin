@@ -23,10 +23,22 @@ $XDG_CONFIG_HOME/obs-studio/plugins/bokis-twitch-chat-plugin/
 bokis-twitch-chat-plugin-<VERSION>-linux-x86_64/
 ├── plugin/bin/64bit/bokis-twitch-chat-plugin.so
 ├── plugin/bin/64bit/bokis-twitch-chat-updater
+├── plugin/data/licenses/NotoColorEmoji-OFL.txt
+├── plugin/uninstall.sh
+├── install.sh
+├── INSTALL.md
+├── SHA256SUMS
 ├── VERSION
 ├── README.md
 └── licenses/NotoColorEmoji-OFL.txt
 ```
+
+For first installation, verify and extract the ZIP, close OBS, then run
+`bash install.sh` inside the extracted directory. This installs both binaries and
+the license without a local build. See [Linux installation](INSTALL_LINUX.md).
+The installer shares both persistent updater locks and refuses pending update
+metadata or an unfinished updater transaction. Its own local rollback directory
+is separate from the updater's journal.
 
 The release workflow runs tests before packaging. In addition to the existing
 standalone `.so`, packaging exports `bokis-twitch-chat-updater-<VERSION>-linux-x86_64.bin`
