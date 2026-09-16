@@ -113,11 +113,30 @@ Run the build before merging:
 
 ## Release flow
 
-1. Update `VERSION` and `buildspec.json` to the same SemVer.
-2. Commit and merge to `main`.
-3. Create an annotated version tag, e.g. `v0.2.0`.
-4. Push the tag.
-5. GitHub Actions builds the Linux package, generates SHA-256 and `update-manifest.json`, then creates a GitHub Release.
+After merging your changes, run from `main` with a clean working tree (including
+no untracked files):
+
+```bash
+./scripts/release.sh 0.1.0-alpha.10
+```
+
+The script runs `git pull --ff-only`, rejects existing local/origin tags, bumps
+`VERSION` and only the project version in `buildspec.json`, then shows the diff.
+Confirm with `y` or `Y` to commit `chore: bump version to <version>`, push the
+commit, create the lightweight tag `v<version>`, and push it to `origin`.
+Configure `main` so its normal `git pull`/`git push` target is `origin/main`.
+GitHub Actions then runs the build, tests, packaging and GitHub Release publication;
+the script does not build anything or change the workflow.
+
+Bash, Git and standard Unix tools (including `awk`) are required. The targeted
+JSON replacement expects the existing two-space indentation of the project
+`version` field and aborts if it is missing or ambiguous. Invoke the script by
+its relative or absolute path from any directory inside the repository.
+Only one version argument is supported; there is no `--dry-run` option.
+Declining confirmation (including EOF) restores both version files. Errors and
+interruptions before a successful commit also restore them. After a successful
+commit, failures leave the commit and any created tag in place for manual recovery;
+inspect local and remote state before retrying. No tags are overwritten or deleted.
 
 The release pipeline is intentionally a baseline. Before public production use, follow `docs/ROADMAP.md` and harden the build environment, action pinning, attestations, and release immutability.
 
