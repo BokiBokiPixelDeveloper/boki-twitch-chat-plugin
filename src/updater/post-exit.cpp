@@ -49,45 +49,45 @@ void require(bool condition, const char *message)
 void syncDirectory(const QString &path)
 {
     Fd fd(open(QFile::encodeName(path).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
-    require(fd.value >= 0 && fsync(fd.value) == 0, "Verzeichnis konnte nicht synchronisiert werden");
+    require(fd.value >= 0 && fsync(fd.value) == 0, "Directory could not be synchronized");
 }
 void saveJson(const QString &path, const QJsonObject &object)
 {
-    require(QDir().mkpath(QFileInfo(path).absolutePath()), "Verzeichnis konnte nicht erstellt werden");
+    require(QDir().mkpath(QFileInfo(path).absolutePath()), "Directory could not be created");
     QSaveFile file(path);
     file.setDirectWriteFallback(false);
     const auto bytes = QJsonDocument(object).toJson();
-    require(file.open(QIODevice::WriteOnly), "Metadaten konnten nicht geöffnet werden");
+    require(file.open(QIODevice::WriteOnly), "Metadata could not be opened");
     require(file.write(bytes) == bytes.size() && file.flush() && fsync(file.handle()) == 0,
-            "Metadaten konnten nicht synchronisiert werden");
-    require(file.commit(), "Metadaten konnten nicht atomar gespeichert werden");
+            "Metadata could not be synchronized");
+    require(file.commit(), "Metadata could not be saved atomically");
     syncDirectory(QFileInfo(path).absolutePath());
 }
 void copySynced(QFile &input, const QString &path, mode_t mode)
 {
     Fd output(open(QFile::encodeName(path).constData(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600));
-    require(output.value >= 0, "Temporäre Datei/Backup konnte nicht erstellt werden");
-    require(input.seek(0), "Quelldatei konnte nicht gelesen werden");
+    require(output.value >= 0, "Temporary file or backup could not be created");
+    require(input.seek(0), "Source file could not be read");
     while (!input.atEnd()) {
         const auto bytes = input.read(64 * 1024);
-        require(!bytes.isEmpty(), "Lesefehler beim Kopieren");
+        require(!bytes.isEmpty(), "Read error while copying");
         qint64 offset = 0;
         while (offset < bytes.size()) {
             const auto written = write(output.value, bytes.constData() + offset, bytes.size() - offset);
             if (written < 0 && errno == EINTR) continue;
-            require(written > 0, "Schreibfehler beim Kopieren");
+            require(written > 0, "Write error while copying");
             offset += written;
         }
     }
-    require(fchmod(output.value, mode) == 0 && fsync(output.value) == 0, "Datei konnte nicht synchronisiert werden");
+    require(fchmod(output.value, mode) == 0 && fsync(output.value) == 0, "File could not be synchronized");
 }
 void verify(QFile &file, const PendingFile &p)
 {
-    require(file.size() == p.size, "Dateigröße stimmt nicht");
-    require(file.seek(0) && file.read(4) == QByteArray("\x7f" "ELF", 4), "Keine ELF-Datei");
-    require(file.seek(0), "Pending-Datei nicht lesbar");
+    require(file.size() == p.size, "File size does not match");
+    require(file.seek(0) && file.read(4) == QByteArray("\x7f" "ELF", 4), "Not an ELF file");
+    require(file.seek(0), "Pending file is not readable");
     QCryptographicHash hash(QCryptographicHash::Sha256);
-    require(hash.addData(&file) && QString::fromLatin1(hash.result().toHex()) == p.sha256.toLower(), "SHA-256 stimmt nicht");
+    require(hash.addData(&file) && QString::fromLatin1(hash.result().toHex()) == p.sha256.toLower(), "SHA-256 does not match");
 }
 }
 QString cacheDirectory() { return xdg("XDG_CACHE_HOME", "/.cache") + "/pending"; }
@@ -148,17 +148,17 @@ bool ensureNotMapped(const QString &target, QString &error, const MappingScan &s
 {
     struct stat targetStat{};
     if (stat(QFile::encodeName(target).constData(), &targetStat) != 0) {
-        error = "Plugin-Ziel konnte für die Prozessprüfung nicht gelesen werden";
+        error = "Plugin target could not be read for the process check";
         return false;
     }
     struct stat executableStat{};
     if (stat(QFile::encodeName(scan.executable).constData(), &executableStat) != 0) {
-        error = "OBS-Executable konnte für die Prozessprüfung nicht gelesen werden";
+        error = "OBS executable could not be read for the process check";
         return false;
     }
     const auto executablePath = QFileInfo(scan.executable).canonicalFilePath();
     const QDir proc(scan.procRoot);
-    if (!QFile::exists(scan.procRoot + "/self/maps")) { error = "procfs-Prozessprüfung nicht verfügbar"; return false; }
+    if (!QFile::exists(scan.procRoot + "/self/maps")) { error = "procfs process check unavailable"; return false; }
     for (const auto &pid : proc.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
         bool numeric = false;
         pid.toLongLong(&numeric);
@@ -197,7 +197,7 @@ bool ensureNotMapped(const QString &target, QString &error, const MappingScan &s
         const auto contents = opened ? maps.readAll() : QByteArray(); // procfs reports size zero.
         if (exited()) continue;
         if (!opened || maps.error() != QFileDevice::NoError || start.isEmpty()) {
-            error = QStringLiteral("Prozessprüfung für OBS-PID %1 verweigert; Installation abgebrochen").arg(pid);
+            error = QStringLiteral("Process check denied for OBS PID %1; installation aborted").arg(pid);
             return false;
         }
         for (const auto &line : contents.split('\n')) {
@@ -210,7 +210,7 @@ bool ensureNotMapped(const QString &target, QString &error, const MappingScan &s
             const auto devMajor = device[0].toUInt(&majorOk, 16), devMinor = device[1].toUInt(&minorOk, 16);
             if (inodeOk && majorOk && minorOk && inode == targetStat.st_ino &&
                 devMajor == major(targetStat.st_dev) && devMinor == minor(targetStat.st_dev)) {
-                error = QStringLiteral("Plugin ist noch in PID %1 gemappt – alle OBS-Instanzen vollständig schließen").arg(pid);
+                error = QStringLiteral("Plugin is still mapped in PID %1 – close all OBS instances completely").arg(pid);
                 return false;
             }
         }
@@ -232,22 +232,22 @@ bool writePending(const QString &directory, const Pending &p, QString &error)
 Pending readPending(const QString &directory)
 {
     QFile file(directory + "/pending.json");
-    require(file.open(QIODevice::ReadOnly), "Pending-Metadaten fehlen");
+    require(file.open(QIODevice::ReadOnly), "Pending metadata is missing");
     const auto p = QJsonDocument::fromJson(file.readAll()).object();
     Pending result{p["fromVersion"].toString(), p["version"].toString(), p["sha256"].toString(),
                    p["binary"].toString(), p["target"].toString(), p["size"].toInteger(-1), std::nullopt};
     const int schema = p["schema"].toInt();
     require((schema == 1 || schema == 2) && !result.version.isEmpty() && result.sha256.size() == 64 && result.size > 0 &&
             QDir::isAbsolutePath(result.target) && result.binary == directory + "/bokis-twitch-chat-plugin.so" &&
-            QFileInfo(result.target).fileName() == "bokis-twitch-chat-plugin.so", "Ungültige Pending-Metadaten");
-    require((schema == 2) == p.contains("helper"), "Ungültiges Pending-Schema für Helper-Update");
+            QFileInfo(result.target).fileName() == "bokis-twitch-chat-plugin.so", "Invalid pending metadata");
+    require((schema == 2) == p.contains("helper"), "Invalid pending schema for helper update");
     if (schema == 2) {
         const auto h = p["helper"].toObject();
         result.helper = PendingFile{h["sha256"].toString(), h["binary"].toString(), h["target"].toString(), h["size"].toInteger(-1)};
         require(QRegularExpression("^[0-9a-fA-F]{64}$").match(result.helper->sha256).hasMatch() && result.helper->size > 0 &&
                 result.helper->binary == directory + "/bokis-twitch-chat-updater" &&
                 result.helper->target == QFileInfo(result.target).absolutePath() + "/bokis-twitch-chat-updater",
-                "Ungültige Pending-Metadaten für Helper");
+                "Invalid pending metadata for helper");
     }
     return result;
 }
@@ -259,7 +259,7 @@ bool launch(const QString &directory, const QString &helper, int lock, QString &
     Fd pidfd(static_cast<int>(syscall(SYS_pidfd_open, pid, 0)));
     Fd executable(open("/proc/self/exe", O_PATH | O_CLOEXEC));
     int pipefd[2];
-    if (lock < 0 || executable.value < 0 || start.isEmpty() || pipe2(pipefd, O_CLOEXEC) != 0) { error = "Helper-Start konnte nicht vorbereitet werden"; return false; }
+    if (lock < 0 || executable.value < 0 || start.isEmpty() || pipe2(pipefd, O_CLOEXEC) != 0) { error = "Helper launch could not be prepared"; return false; }
     Fd reader(pipefd[0]), writer(pipefd[1]);
     const auto exe = QFile::encodeName(helper), dir = QFile::encodeName(directory);
     const auto pidArg = QByteArray::number(pid), fdArg = QByteArray::number(pidfd.value), lockArg = QByteArray::number(lock);
@@ -295,13 +295,13 @@ bool launch(const QString &directory, const QString &helper, int lock, QString &
         _exit(127);
     }
     close(writer.value); writer.value = -1;
-    if (child < 0) { error = "fork fehlgeschlagen"; return false; }
+    if (child < 0) { error = "fork failed"; return false; }
     int status;
     while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
     int failure = 0;
     ssize_t count;
     do { count = read(reader.value, &failure, sizeof(failure)); } while (count < 0 && errno == EINTR);
-    if (count != 0) { error = QStringLiteral("Helper konnte nicht gestartet werden: %1").arg(QString::fromLocal8Bit(strerror(failure))); return false; }
+    if (count != 0) { error = QStringLiteral("Helper could not be started: %1").arg(QString::fromLocal8Bit(strerror(failure))); return false; }
     return true;
 }
 namespace {
@@ -323,22 +323,22 @@ void restore(const InstallFile &item, const MappingScan &scan)
 {
     // Keep the original rollback inode available until all restores are durable.
     struct stat original{}, current{};
-    require(stat(QFile::encodeName(item.rollback).constData(), &original) == 0, "Rücksicherungsdatei fehlt");
+    require(stat(QFile::encodeName(item.rollback).constData(), &original) == 0, "Rollback file is missing");
     if (stat(QFile::encodeName(item.file.target).constData(), &current) == 0 &&
         original.st_dev == current.st_dev && original.st_ino == current.st_ino) return;
     if (QFileInfo(item.file.target).fileName() == "bokis-twitch-chat-plugin.so") checkMappings(item.file.target, scan);
     const auto restoring = item.rollback + ".restore";
     QFile::remove(restoring);
     require(::link(QFile::encodeName(item.rollback).constData(), QFile::encodeName(restoring).constData()) == 0,
-            "Rollback-Link konnte nicht erstellt werden");
-    require(renameFile(restoring, item.file.target) == 0, "Rollback-Rename fehlgeschlagen; manuelle Wiederherstellung erforderlich");
+            "Rollback link could not be created");
+    require(renameFile(restoring, item.file.target) == 0, "Rollback rename failed; manual recovery required");
     syncDirectory(QFileInfo(item.file.target).absolutePath());
 }
 void cleanupTransaction(const std::vector<InstallFile> &files, const QString &journal)
 {
     // Remove the journal durably first: otherwise recovery could reference deleted originals.
     if (QFile::exists(journal)) {
-        require(QFile::remove(journal), "Transaktionsjournal konnte nicht entfernt werden");
+        require(QFile::remove(journal), "Transaction journal could not be removed");
         syncDirectory(QFileInfo(journal).absolutePath());
     }
     for (const auto &item : files) {
@@ -358,38 +358,38 @@ bool install(const QString &directory, const QString &backups, const QString &re
     Fd useLock; // Retain the target lock through rollback, result persistence and cleanup.
     try {
         p = readPending(directory);
-        require(waiter(), "Prozessende konnte nicht sicher festgestellt werden");
+        require(waiter(), "Process exit could not be determined safely");
         p = readPending(directory);
         useLock.value = acquireLock(p.target + ".use.lock");
-        require(useLock.value >= 0, "Eine weitere OBS-Instanz verwendet das Plugin");
+        require(useLock.value >= 0, "Another OBS instance is using the plugin");
         checkMappings(p.target, scan);
         if (p.helper) files.push_back({*p.helper, {}, {}, false}); // Helper first; plugin is the final swap.
         files.push_back({{p.sha256, p.binary, p.target, p.size}, {}, {}, false});
 
         if (QFile::exists(journalPath)) {
             QFile journalFile(journalPath);
-            require(journalFile.open(QIODevice::ReadOnly), "Transaktionsjournal nicht lesbar");
+            require(journalFile.open(QIODevice::ReadOnly), "Transaction journal is not readable");
             const auto journal = QJsonDocument::fromJson(journalFile.readAll()).object();
             const auto entries = journal["files"].toArray();
             const auto id = journal["id"].toString();
             require(journal["schema"].toInt() == 1 && journal["version"].toString() == p.version &&
                     QRegularExpression("^[0-9a-f]{32}$").match(id).hasMatch() &&
-                    entries.size() == static_cast<qsizetype>(files.size()), "Ungültiges Transaktionsjournal");
+                    entries.size() == static_cast<qsizetype>(files.size()), "Invalid transaction journal");
             for (size_t i = 0; i < files.size(); ++i) {
                 auto &item = files[i];
                 const auto entry = entries[static_cast<qsizetype>(i)].toObject();
                 require(entry["target"].toString() == item.file.target && entry["sha256"].toString() == item.file.sha256,
-                        "Transaktionsjournal gehört zu einem anderen Update");
+                        "Transaction journal belongs to a different update");
                 item.candidate = item.file.target + ".update-" + id;
                 item.rollback = item.file.target + ".rollback-" + id;
             }
             const auto phase = journal["phase"].toString();
-            require(phase == "prepared" || phase == "committed", "Ungültiger Transaktionsstatus");
+            require(phase == "prepared" || phase == "committed", "Invalid transaction state");
             journalPrepared = true;
             if (phase == "committed") {
                 for (const auto &item : files) {
                     QFile installed(item.file.target);
-                    require(installed.open(QIODevice::ReadOnly), "Installierte Transaktion nicht lesbar");
+                    require(installed.open(QIODevice::ReadOnly), "Installed transaction is not readable");
                     verify(installed, item.file);
                 }
                 committed = true; // Finish an interrupted result/state cleanup without installing twice.
@@ -406,11 +406,11 @@ bool install(const QString &directory, const QString &backups, const QString &re
             // Verify EVERY payload before preparing or exchanging either installed file.
             for (const auto &item : files) {
                 QFile input(item.file.binary);
-                require(!QFileInfo(item.file.binary).isSymLink() && input.open(QIODevice::ReadOnly), "Pending-Datei fehlt oder ist nicht lesbar");
+                require(!QFileInfo(item.file.binary).isSymLink() && input.open(QIODevice::ReadOnly), "Pending file is missing or unreadable");
                 verify(input, item.file);
-                require(!QFileInfo(item.file.target).isSymLink(), "Installationsziel darf kein Symlink sein");
+                require(!QFileInfo(item.file.target).isSymLink(), "Installation target must not be a symbolic link");
             }
-            require(QDir().mkpath(backups), "Backup-Verzeichnis konnte nicht erstellt werden");
+            require(QDir().mkpath(backups), "Backup directory could not be created");
             const auto id = QUuid::createUuid().toString(QUuid::Id128);
             const auto stamp = QDateTime::currentDateTimeUtc().toString("yyyyMMddTHHmmsszzz") + "-" + id;
             QJsonArray entries;
@@ -418,16 +418,16 @@ bool install(const QString &directory, const QString &backups, const QString &re
                 item.candidate = item.file.target + ".update-" + id;
                 item.rollback = item.file.target + ".rollback-" + id;
                 QFile input(item.file.binary), old(item.file.target);
-                require(input.open(QIODevice::ReadOnly) && old.open(QIODevice::ReadOnly), "Update/Original konnte nicht gelesen werden");
+                require(input.open(QIODevice::ReadOnly) && old.open(QIODevice::ReadOnly), "Update or original could not be read");
                 struct stat st{};
-                require(fstat(old.handle(), &st) == 0 && S_ISREG(st.st_mode), "Installiertes Ziel ist keine reguläre Datei");
+                require(fstat(old.handle(), &st) == 0 && S_ISREG(st.st_mode), "Installed target is not a regular file");
                 copySynced(old, backups + "/" + stamp + "-" + QFileInfo(item.file.target).fileName(), 0755);
                 copySynced(input, item.candidate, 0755);
                 QFile copied(item.candidate);
-                require(copied.open(QIODevice::ReadOnly), "Temporäre Datei nicht lesbar");
+                require(copied.open(QIODevice::ReadOnly), "Temporary file is not readable");
                 verify(copied, item.file);
                 require(::link(QFile::encodeName(item.file.target).constData(), QFile::encodeName(item.rollback).constData()) == 0,
-                        "Lokale Rücksicherung konnte nicht erstellt werden");
+                        "Local rollback link could not be created");
                 syncDirectory(QFileInfo(item.file.target).absolutePath());
                 entries.append(QJsonObject{{"target", item.file.target}, {"sha256", item.file.sha256}});
             }
@@ -439,7 +439,7 @@ bool install(const QString &directory, const QString &backups, const QString &re
             for (auto &item : files) {
                 checkMappings(p.target, scan); // Also catch instances that appeared while copying/backing up.
                 const auto renamed = renameOperation ? renameOperation(item.candidate, item.file.target) : renameFile(item.candidate, item.file.target);
-                require(renamed == 0, "Atomarer Austausch fehlgeschlagen");
+                require(renamed == 0, "Atomic replacement failed");
                 item.swapped = true;
                 syncDirectory(QFileInfo(item.file.target).absolutePath());
             }
@@ -459,7 +459,7 @@ bool install(const QString &directory, const QString &backups, const QString &re
                 journalPrepared = false;
             } catch (const std::exception &rollbackError) {
                 rollbackFailed = true;
-                error += QStringLiteral("; Rollback unvollständig: ") + QString::fromUtf8(rollbackError.what());
+                error += QStringLiteral("; rollback incomplete: ") + QString::fromUtf8(rollbackError.what());
             }
         }
     }
@@ -479,9 +479,9 @@ bool install(const QString &directory, const QString &backups, const QString &re
         if (committed) {
             // A committed journal makes partially completed cleanup safe to resume.
             for (const auto &item : files) {
-                if (QFile::exists(item.file.binary)) require(QFile::remove(item.file.binary), "Pending-Datei konnte nicht entfernt werden");
+                if (QFile::exists(item.file.binary)) require(QFile::remove(item.file.binary), "Pending file could not be removed");
             }
-            require(QFile::remove(directory + "/pending.json"), "Pending-Metadaten konnten nicht entfernt werden");
+            require(QFile::remove(directory + "/pending.json"), "Pending metadata could not be removed");
             syncDirectory(directory);
             cleanupTransaction(files, journalPath);
         }

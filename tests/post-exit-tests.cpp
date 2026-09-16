@@ -181,7 +181,7 @@ private Q_SLOTS:
         QVERIFY(mapper.waitForFinished());
         const auto outcome = QJsonDocument::fromJson(get(result)).object();
         QVERIFY(!outcome["success"].toBool(true));
-        QVERIFY2(outcome["error"].toString().contains("gemappt"), qPrintable(outcome["error"].toString()));
+        QVERIFY2(outcome["error"].toString().contains("mapped"), qPrintable(outcome["error"].toString()));
         QCOMPARE(get(f.target), oldBytes);
     }
     void helperTransaction()
@@ -269,7 +269,7 @@ private Q_SLOTS:
         const auto result = QJsonDocument::fromJson(get(f.result)).object();
         QVERIFY(!result["success"].toBool(true));
         QVERIFY(result["rollbackFailed"].toBool());
-        QVERIFY(error.contains("Rollback unvollständig"));
+        QVERIFY(error.contains("rollback incomplete"));
         QVERIFY(QFile::exists(f.pending + "/transaction.json"));
         QCOMPARE(QDir(f.backups).entryList(QDir::Files).size(), 2);
         QCOMPARE(get(f.target), oldBytes);
@@ -287,7 +287,7 @@ private Q_SLOTS:
         child.write("exit\n");
         QVERIFY(child.waitForFinished());
         QVERIFY(!installed);
-        QVERIFY2(error.contains("gemappt"), qPrintable(error));
+        QVERIFY2(error.contains("mapped"), qPrintable(error));
         QCOMPARE(get(f.target), oldBytes);
         QCOMPARE(get(f.p.helper->target), QByteArray("old helper"));
     }

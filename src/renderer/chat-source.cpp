@@ -564,28 +564,28 @@ obs_properties_t *ChatSource::properties()
 
     obs_properties_t *twitch = obs_properties_create();
     obs_properties_add_text(twitch, S_CLIENT_ID, "Twitch Client ID", OBS_TEXT_DEFAULT);
-    obs_properties_add_text(twitch, S_CHANNEL, "Kanal (Loginname)", OBS_TEXT_DEFAULT);
+    obs_properties_add_text(twitch, S_CHANNEL, "Channel (login name)", OBS_TEXT_DEFAULT);
     const QByteArray statusUtf8 = QStringLiteral("Status: %1").arg(status_).toUtf8();
     obs_properties_add_text(twitch, "status_info", statusUtf8.constData(), OBS_TEXT_INFO);
-    obs_properties_add_button2(twitch, "connect_twitch", "Mit Twitch verbinden (Device Flow)", buttonConnect, this);
+    obs_properties_add_button2(twitch, "connect_twitch", "Connect to Twitch (Device Flow)", buttonConnect, this);
     obs_properties_add_group(props, "twitch_group", "Twitch", OBS_GROUP_NORMAL, twitch);
 
     obs_properties_t *layout = obs_properties_create();
-    obs_properties_add_int(layout, S_CANVAS_W, "Breite", 320, 7680, 1);
-    obs_properties_add_int(layout, S_CANVAS_H, "Höhe", 240, 4320, 1);
+    obs_properties_add_int(layout, S_CANVAS_W, "Width", 320, 7680, 1);
+    obs_properties_add_int(layout, S_CANVAS_H, "Height", 240, 4320, 1);
     obs_properties_add_int(layout, S_LANES, "Primary Lanes", 1, 20, 1);
     obs_properties_add_int_slider(layout, S_JITTER, "Y-Jitter (px)", 0, 150, 1);
 
-    obs_property_t *fontList = obs_properties_add_list(layout, S_FONT_FAMILY, "Schriftart",
+    obs_property_t *fontList = obs_properties_add_list(layout, S_FONT_FAMILY, "Font family",
                                                        OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-    obs_property_list_add_string(fontList, "Systemstandard", "");
+    obs_property_list_add_string(fontList, "System default", "");
     const QStringList families = QFontDatabase::families();
     for (const QString &family : families) {
         const QByteArray utf8 = family.toUtf8();
         obs_property_list_add_string(fontList, utf8.constData(), utf8.constData());
     }
 
-    obs_property_t *weightList = obs_properties_add_list(layout, S_FONT_WEIGHT, "Schriftgewicht",
+    obs_property_t *weightList = obs_properties_add_list(layout, S_FONT_WEIGHT, "Font weight",
                                                          OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
     obs_property_list_add_int(weightList, "Light (300)", 300);
     obs_property_list_add_int(weightList, "Regular (400)", 400);
@@ -593,33 +593,33 @@ obs_properties_t *ChatSource::properties()
     obs_property_list_add_int(weightList, "SemiBold (600)", 600);
     obs_property_list_add_int(weightList, "Bold (700)", 700);
     obs_property_list_add_int(weightList, "ExtraBold (800)", 800);
-    obs_properties_add_float_slider(layout, S_OUTLINE, "Textumrandung (px)", 0.0, 10.0, 0.25);
+    obs_properties_add_float_slider(layout, S_OUTLINE, "Text outline (px)", 0.0, 10.0, 0.25);
 
-    obs_properties_add_int_slider(layout, S_MIN_FONT, "Min. Schriftgröße", 12, 120, 1);
-    obs_properties_add_int_slider(layout, S_MAX_FONT, "Max. Schriftgröße", 18, 180, 1);
-    obs_properties_add_float_slider(layout, S_MIN_SPEED, "Min. Geschwindigkeit (px/s)", 20.0, 2000.0, 10.0);
-    obs_properties_add_float_slider(layout, S_MAX_SPEED, "Max. Geschwindigkeit (px/s)", 100.0, 6000.0, 25.0);
-    obs_properties_add_int(layout, S_MAX_MSG, "Max. aktive Nachrichten", 4, 300, 1);
-    obs_properties_add_button2(layout, "test_message", "Emojis und Emotes testen", buttonTestMessage, this);
-    obs_properties_add_group(props, "layout_group", "Nachrichten", OBS_GROUP_NORMAL, layout);
+    obs_properties_add_int_slider(layout, S_MIN_FONT, "Min. font size", 12, 120, 1);
+    obs_properties_add_int_slider(layout, S_MAX_FONT, "Max. font size", 18, 180, 1);
+    obs_properties_add_float_slider(layout, S_MIN_SPEED, "Min. speed (px/s)", 20.0, 2000.0, 10.0);
+    obs_properties_add_float_slider(layout, S_MAX_SPEED, "Max. speed (px/s)", 100.0, 6000.0, 25.0);
+    obs_properties_add_int(layout, S_MAX_MSG, "Max. active messages", 4, 300, 1);
+    obs_properties_add_button2(layout, "test_message", "Test emojis and emotes", buttonTestMessage, this);
+    obs_properties_add_group(props, "layout_group", "Messages", OBS_GROUP_NORMAL, layout);
 
     obs_properties_t *gifs = obs_properties_create();
-    obs_properties_add_int(gifs, S_MAX_GIFS, "Max. GIFs gleichzeitig", 0, 30, 1);
-    obs_properties_add_int_slider(gifs, S_GIF_SIZE, "GIF-Größe", 64, 600, 1);
-    obs_properties_add_float_slider(gifs, S_GIF_SPEED, "GIF-Bounce-Speed (px/s)", 20.0, 1200.0, 10.0);
-    obs_properties_add_float_slider(gifs, S_GIF_LIFETIME, "GIF-Lebensdauer (Sekunden)", 2.0, 60.0, 0.5);
-    obs_properties_add_button2(gifs, "test_gif", "Native GIF-Animation testen", buttonTestGif, this);
+    obs_properties_add_int(gifs, S_MAX_GIFS, "Max. simultaneous GIFs", 0, 30, 1);
+    obs_properties_add_int_slider(gifs, S_GIF_SIZE, "GIF size", 64, 600, 1);
+    obs_properties_add_float_slider(gifs, S_GIF_SPEED, "GIF bounce speed (px/s)", 20.0, 1200.0, 10.0);
+    obs_properties_add_float_slider(gifs, S_GIF_LIFETIME, "GIF lifetime (seconds)", 2.0, 60.0, 0.5);
+    obs_properties_add_button2(gifs, "test_gif", "Test native GIF animation", buttonTestGif, this);
     obs_properties_add_group(props, "gif_group", "GIFs", OBS_GROUP_NORMAL, gifs);
 
     obs_properties_t *updates = obs_properties_create();
-    const QByteArray versionInfo = QStringLiteral("Installiert: %1").arg(QString::fromUtf8(BOKIS_TWITCH_CHAT_VERSION)).toUtf8();
+    const QByteArray versionInfo = QStringLiteral("Installed: %1").arg(QString::fromUtf8(BOKIS_TWITCH_CHAT_VERSION)).toUtf8();
     obs_properties_add_text(updates, "installed_version_info", versionInfo.constData(), OBS_TEXT_INFO);
-    obs_properties_add_bool(updates, S_AUTO_UPDATE_CHECK, "Beim Start automatisch nach Updates suchen");
-    const QByteArray updateStatus = QStringLiteral("Status: %1").arg(updater_ ? updater_->status() : QStringLiteral("Updater nicht verfügbar")).toUtf8();
+    obs_properties_add_bool(updates, S_AUTO_UPDATE_CHECK, "Automatically check for updates on startup");
+    const QByteArray updateStatus = QStringLiteral("Status: %1").arg(updater_ ? updater_->status() : QStringLiteral("Updater unavailable")).toUtf8();
     obs_properties_add_text(updates, "update_status_info", updateStatus.constData(), OBS_TEXT_INFO);
-    obs_property_t *checkButton = obs_properties_add_button2(updates, "check_updates", "Nach Updates suchen", buttonCheckUpdates, this);
+    obs_property_t *checkButton = obs_properties_add_button2(updates, "check_updates", "Check for updates", buttonCheckUpdates, this);
     obs_property_set_enabled(checkButton, updater_ && !updater_->busy() && updater_->state() != UpdateChecker::State::Ready);
-    obs_property_t *installButton = obs_properties_add_button2(updates, "install_update", "Update installieren", buttonInstallUpdate, this);
+    obs_property_t *installButton = obs_properties_add_button2(updates, "install_update", "Install update", buttonInstallUpdate, this);
     obs_property_set_enabled(installButton, updater_ && updater_->hasAvailableUpdate() && !updater_->busy());
     obs_properties_add_group(props, "update_group", "Updates", OBS_GROUP_NORMAL, updates);
 

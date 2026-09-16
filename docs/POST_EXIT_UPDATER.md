@@ -219,7 +219,7 @@ pruned. No automatic rollback based on OBS startup health is implemented.
 1. Fully close OBS. Build and run `./scripts/install-user.sh` to install **both**
    binaries. Keep a known working backup. Do not install over a running OBS process.
 2. Start OBS with a chat source and select a newer existing test release in the
-   configured feed. Click **Nach Updates suchen**, then **Update installieren**.
+   configured feed. Click **Check for updates**, then **Install update**.
 3. Confirm the full-close message, both pending files, and one helper process.
    Compare `sha256sum` of the installed `.so` before/after staging: it must match.
    Repeated buttons/another source must not start a second download/helper.

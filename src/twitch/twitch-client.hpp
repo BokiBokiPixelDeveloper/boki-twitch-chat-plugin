@@ -71,5 +71,5 @@ private:
 
     EmoteService emotes_;
 
-    QString statusText_{QStringLiteral("Nicht verbunden")};
+    QString statusText_{QStringLiteral("Disconnected")};
 };

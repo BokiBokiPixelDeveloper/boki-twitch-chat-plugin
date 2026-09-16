@@ -59,7 +59,7 @@ private:
     QString lastResult_;
     QByteArray pluginPayload_, helperPayload_;
     QString currentVersion_;
-    QString status_{QStringLiteral("Noch nicht geprüft")};
+    QString status_{QStringLiteral("Not checked yet")};
     AvailableUpdate available_;
     bool hasAvailable_ = false;
     State state_ = State::Idle;

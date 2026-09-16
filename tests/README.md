@@ -25,7 +25,7 @@ rectangle, lasting 40, 120 and 80 ms. GIF uses restore-to-background disposal;
 WebP was encoded losslessly with libwebp. They contain no third-party artwork.
 
 The test suite checks CPU layout and animation state. The final OBS graphics draw
-path requires a manual source preview. Use **Emojis und Emotes testen**, then check
+path requires a manual source preview. Use **Test emojis and emotes**, then check
 live messages containing native Twitch emotes and enabled channel emotes from all
 three providers. Also verify that existing font, lane and separate GIF settings
 continue to work after an OBS restart.
@@ -77,6 +77,6 @@ network, installed plugin, or real user cache is touched. It covers:
 - Destruction with a pending UI notification
 
 A manual Linux/Qt6 OBS check is still needed for actual button widget dispatch:
-click **Nach Updates suchen**, then **Update installieren**, including repeated
+click **Check for updates**, then **Install update**, including repeated
 clicks and closing the properties/source while requests are pending. Confirm that
 the loaded `.so` stays unchanged and the verified file appears only in `pending`.

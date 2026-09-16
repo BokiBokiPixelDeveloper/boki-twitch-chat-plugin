@@ -83,7 +83,7 @@ private:
     QString channel_;
     QString accessToken_;
     QString refreshToken_;
-    QString status_{QStringLiteral("Nicht verbunden")};
+    QString status_{QStringLiteral("Disconnected")};
 
     mutable std::mt19937 rng_{std::random_device{}()};
 };
