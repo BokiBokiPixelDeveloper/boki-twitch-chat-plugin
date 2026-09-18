@@ -34,7 +34,7 @@ jobs:
         shell: pwsh
         run: ./tests/windows-installer-tests.ps1
       - name: Upload Windows release payload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-payload-windows
           if-no-files-found: error
