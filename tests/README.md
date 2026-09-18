@@ -1,5 +1,33 @@
 # Tests
 
+Windows uses the same chat/update-checker suites, plus a native post-exit suite:
+
+    ./scripts/bootstrap-windows.ps1
+    cmake --preset windows-x86_64
+    cmake --build --preset windows-x86_64
+    ctest --test-dir build/windows-x86_64 -C RelWithDebInfo --output-on-failure
+    ./scripts/package-windows.ps1
+    ./tests/windows-installer-tests.ps1
+
+Bootstrap builds the matching upstream QtTest module because OBS's Qt package
+omits it. GUI tests use the Windows platform plugin; Linux uses offscreen.
+The Windows suite covers Unicode/space paths, PE validation, pending metadata,
+hash/size rejection, exact process handles and creation times, inherited locks,
+loaded DLLs through hardlinks, conservative relevant-process classification,
+unrelated denied processes, both rename failures, prepared/committed journal
+recovery, backups, cleanup/results, and plugin-only/paired temporary-runner updates.
+The runner lifecycle strips Qt/OBS/developer directories from PATH.
+
+Installer smoke tests use temporary Unicode destinations and state directories,
+disable environment registration, and refuse to run over an existing Installed
+Apps entry. They verify checksums, ZIP layout, metadata, silent install/reinstall,
+loaded-file/lock/pending refusal, silent uninstall, preservation of state/unknown
+files, and ZIP/developer script installation. They never install into a real OBS
+directory. A tiny fixture DLL supplies a real Windows image mapping without OBS.
+
+The Python manifest suite runs on both platforms and verifies platform entries,
+size/hash correspondence, legacy Linux shape and corrupt/missing payload refusal.
+
 On Linux, the installer/package tests also require Python 3 and `zip` (test-time
 dependencies only). CI installs them before configuring.
 

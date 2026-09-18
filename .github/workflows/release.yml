@@ -47,62 +47,38 @@ jobs:
       - name: Package
         run: ./scripts/package.sh
 
-      - name: Generate update manifest
-        shell: bash
-        run: |
-          VERSION="$(tr -d '[:space:]' < VERSION)"
-          ZIP="bokis-twitch-chat-plugin-${VERSION}-linux-x86_64.zip"
-          BINARY="bokis-twitch-chat-plugin-${VERSION}-linux-x86_64.so"
-          HELPER="bokis-twitch-chat-updater-${VERSION}-linux-x86_64.bin"
-          HELPER_HASH="$(cut -d' ' -f1 "release/${HELPER}.sha256")"
-          HELPER_SIZE="$(stat -c%s "release/${HELPER}")"
-          HASH="$(cut -d' ' -f1 "release/${BINARY}.sha256")"
-          SIZE="$(stat -c%s "release/${BINARY}")"
-          cat > release/update-manifest.json <<JSON
-          {
-            "schema": 1,
-            "version": "${VERSION}",
-            "channel": "stable",
-            "platforms": {
-              "linux-x86_64": {
-                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${BINARY}",
-                "sha256": "${HASH}",
-                "size": ${SIZE},
-                "helper": {
-                  "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${HELPER}",
-                  "sha256": "${HELPER_HASH}",
-                  "size": ${HELPER_SIZE}
-                }
-              }
-            },
-            "obs": {
-              "minVersion": "32.0.0",
-              "maxMajorVersion": 32
-            }
-          }
-          JSON
-
       - name: Upload release payload
         uses: actions/upload-artifact@v4
         with:
-          name: release-payload
+          name: release-payload-linux
           path: |
             release/*.zip
             release/*.so
             release/*.bin
             release/*.sha256
-            release/update-manifest.json
+
+  build-windows:
+    name: Build Windows release
+    uses: ./.github/workflows/windows-build.yml
 
   publish:
     name: Publish GitHub Release
-    needs: build-linux
+    needs: [build-linux, build-windows]
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download release payload
         uses: actions/download-artifact@v4
         with:
-          name: release-payload
+          pattern: release-payload-*
+          merge-multiple: true
           path: release
+
+      - name: Generate and verify combined manifest
+        run: |
+          python scripts/generate-manifest.py release --repository "$GITHUB_REPOSITORY"
+          python scripts/generate-manifest.py release --repository "$GITHUB_REPOSITORY" --verify
 
       - name: Create immutable-ready release payload
         env:

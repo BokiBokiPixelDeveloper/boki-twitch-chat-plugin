@@ -18,7 +18,7 @@ The project is intentionally not named after one visual style. The current imple
 - Tag-driven GitHub Release baseline
 - SHA-256 release package + update manifest generation
 - Built-in update checker in OBS properties
-- Verified Linux update download staged for installation after OBS exits
+- Verified Linux/Windows update downloads staged for installation after OBS exits
 - Architecture reserved for additional render modes and web themes
 
 See `docs/ARCHITECTURE.md` for the multi-renderer direction.
@@ -81,6 +81,19 @@ libraries compatible with the Arch-built release; Flatpak, Snap and portable OBS
 need separate packaging. `bash install.sh --check` checks the package/runtime
 without installing. See [Linux installation](docs/INSTALL_LINUX.md) for verification,
 requirements, reinstalling, uninstalling and recovery.
+
+## Install a Windows release
+
+Use the **Windows x86_64 setup EXE** for per-user installation without
+administrator privileges. Close OBS first. The installer includes the plugin,
+updater and uninstaller; normal uninstall preserves OBS settings and updater data.
+Windows builds target native OBS **32.2.2+ within OBS 32**.
+
+The installer is currently unsigned, so SmartScreen may warn. Per-user discovery
+uses OBS's supported environment settings and preserves existing custom settings.
+See [Windows installation](docs/INSTALL_WINDOWS.md) for checksums, ZIP installation,
+Unicode discovery limitations, storage/recovery paths and developer builds.
+Windows native build/runtime validation is provided by the Windows CI job.
 
 ## Local Arch development
 

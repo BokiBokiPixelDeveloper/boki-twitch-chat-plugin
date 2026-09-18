@@ -1,4 +1,75 @@
-# Linux post-exit updater
+# Post-exit updater
+
+Shared pending-state, hash verification, backup, transaction, recovery and result
+logic lives in src/updater/post-exit-shared.cpp. The small filesystem/process
+interface in post-exit-internal.hpp is implemented by post-exit.cpp (Linux)
+and post-exit-windows.cpp (Windows). Linux's existing syscall implementation and
+installer remain in use. [Windows installation](INSTALL_WINDOWS.md) covers setup.
+
+## Windows backend
+
+Windows builds produce a native DLL and a self-contained helper EXE. Runtime
+platform selection uses the compiled backend: windows-x86_64 or linux-x86_64.
+The public release manifest stays schema 1. Both entries have the same plugin
+fields and optional helper object; Windows additionally declares its OBS ABI
+range, checked against obs_get_version() before offering the update.
+An old manifest without a Windows entry reports an unavailable platform.
+An entry without a helper still supports plugin-only updates.
+
+1. Staging verifies size, SHA-256, MZ, PE signature, AMD64 machine and PE32+ magic.
+   It flushes payloads and publishes pending metadata only after both are valid.
+2. Exclusive CreateFileW sharing locks serialize updates. Cooperating plugin
+   instances hold a shared persistent DLL use-lock. Lock files are never deleted.
+3. Before launching, copy the installed helper into a unique directory under
+   LocalAppData/cache/runners, flush it, and compare its hash to the source.
+   CreateProcessW executes that copy using an explicit application path and
+   quoted arguments. No shell, command string interpreter or service is involved.
+4. OBS opens a handle to itself with SYNCHRONIZE and PROCESS_QUERY_LIMITED_INFORMATION,
+   captures PID and the creation FILETIME, and passes inherited duplicates of the
+   process handle, update-lock handle and readiness event. STARTUPINFOEX whitelists
+   only these handles. Readiness acknowledgement is bounded to 10 seconds on the
+   update action, outside OBS render/tick callbacks.
+5. The static-runtime bootstrap extracts its embedded Qt worker, QtCore and MSVC
+   runtime into the unique runner directory, then passes the same handle whitelist
+   to that worker. Windows provides ICU/UCRT. Tests strip developer DLL directories
+   from PATH to check the helper has no accidental dependency on them.
+6. The worker validates GetProcessId, GetProcessTimes and the inherited lock path,
+   signals readiness, then calls WaitForSingleObject on the captured process
+   handle. PID reuse cannot redirect that handle to a different process.
+7. After that process exits, reread metadata and acquire the exclusive use-lock.
+   Enumerate processes/modules with Toolhelp and EnumProcessModulesEx. Compare
+   normalized module paths and volume/file IDs, including hardlinks. An executable
+   matching the captured OBS path/file identity is a relevant candidate: unreadable
+   modules for a live candidate block installation. Unrelated denied processes
+   do not. A final kernel write-open check also rejects loaded/locked DLLs.
+8. Execute the same shared transaction as Linux. Copy and verify candidates beside
+   the targets, flush files with FlushFileBuffers, prepare backups and local
+   hardlinks, and publish the journal. MoveFileExW with REPLACE_EXISTING and
+   WRITE_THROUGH replaces the installed helper first and plugin DLL last.
+   COPY_ALLOWED is never used; cache may be on another volume.
+9. Save the result and clean pending state. Because only the temporary copy and
+   extracted worker are executing, the installed helper EXE can be replaced.
+   The worker/bootstrap exit naturally; they never terminate or restart OBS.
+
+Windows uses Known Folders under %LOCALAPPDATA%\BokisTwitchChatPlugin:
+cache/pending, cache/runners, backups, and state. Loaded module paths use
+GetModuleHandleExW/GetModuleFileNameW. All native path operations use wide APIs.
+
+The shared journal uses the same prepared/committed recovery and reverse-order
+rollback described below. Two MoveFileEx operations are not an atomic pair.
+Windows has no equivalent portable directory-fsync API: files are flushed and
+metadata/swaps use WRITE_THROUGH, but power-loss behavior still depends on storage.
+Failed rollback preserves evidence and reports rollbackFailed.
+NTFS/hardlink support and a writable user installation are required.
+Antivirus or another process can deny replacement; this is a reported failure.
+Do not start another OBS instance while the helper is applying an update.
+
+Old runner directories/backups are retained rather than deleting running images.
+Cleanup can be performed after confirming no updater is active. The full installer
+is needed for new external runtime dependencies; automatic updates cover the
+plugin and self-contained helper only.
+
+## Linux implementation
 
 ## Installation and packaging
 
@@ -209,7 +280,7 @@ pruned. No automatic rollback based on OBS startup health is implemented.
 
 ## Limits
 
-- Linux only; requires writable user installation, procfs for fallback, and Qt Core.
+- Linux backend requires writable user installation, procfs for fallback, and Qt Core.
   No sudo, daemon, systemd unit, OBS termination, or automatic restart.
 - Close all OBS instances and wait for the result before restarting. The use-lock
   protects cooperating instances after module initialization, and the maps scan

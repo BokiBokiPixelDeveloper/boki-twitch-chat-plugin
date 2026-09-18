@@ -17,6 +17,12 @@
       "architectures": [
         "x86_64"
       ]
+    },
+    "windows": {
+      "architectures": [
+        "x86_64"
+      ],
+      "obsMinVersion": "32.2.2"
     }
   }
 }

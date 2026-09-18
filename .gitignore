@@ -1,6 +1,8 @@
 # Build output
 /build/
 /release/
+/.deps/
+__pycache__/
 
 # CMake
 CMakeUserPresets.json

@@ -4,7 +4,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <unistd.h>
 #include <QPointer>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -121,7 +120,7 @@ UpdateChecker::UpdateChecker(QString currentVersion, StateCallback stateChanged,
 
 UpdateChecker::~UpdateChecker()
 {
-    if (updateLock_ >= 0) close(updateLock_);
+    if (updateLock_ >= 0) postexit::releaseLock(updateLock_);
 }
 
 bool UpdateChecker::resumePending()
@@ -140,9 +139,9 @@ bool UpdateChecker::resumePending()
         if (pending.target != targetPath_)
             error = QStringLiteral("Pending update belongs to a different plugin installation");
         else
-            started = launcher_(pendingDirectory_, QFileInfo(targetPath_).absolutePath() + "/bokis-twitch-chat-updater", lock, error);
+            started = launcher_(pendingDirectory_, QFileInfo(targetPath_).absolutePath() + "/" + postexit::helperFileName(), lock, error);
     } catch (const std::exception &e) { error = QString::fromUtf8(e.what()); }
-    close(lock);
+    postexit::releaseLock(lock);
     setStatus(started ? State::Ready : State::Error, started
         ? QStringLiteral("Update ready – close OBS completely. Installation will start automatically after it exits.")
         : QStringLiteral("Pending update could not be started: %1").arg(error));
@@ -219,12 +218,32 @@ void UpdateChecker::handleManifestReply(QNetworkReply *reply)
 
     const QJsonObject root = doc.object();
     const QString version = root.value(QStringLiteral("version")).toString();
-    const QJsonObject platform = root.value(QStringLiteral("platforms")).toObject().value(QStringLiteral("linux-x86_64")).toObject();
+    const QJsonObject platform = root.value(QStringLiteral("platforms")).toObject().value(postexit::platformKey()).toObject();
+    if (!version.isEmpty() && platform.isEmpty()) {
+        setStatus(State::Error, QStringLiteral("This release has no package for %1").arg(postexit::platformKey()));
+        return;
+    }
+    // Platform-specific ABI requirements are optional for legacy manifests.
+    if (platform.contains("obs")) {
+        const auto compatibility = platform["obs"].toObject();
+        const auto minimum = QVersionNumber::fromString(compatibility["minVersion"].toString());
+        const int maximum = compatibility["maxMajorVersion"].toInt(-1);
+        const auto api = obs_get_version();
+        const QVersionNumber running(int(api >> 24), int((api >> 16) & 0xff), int(api & 0xffff));
+        if (minimum.isNull() || maximum < minimum.majorVersion() ||
+            running < minimum || running.majorVersion() > maximum) {
+            setStatus(State::Error, QStringLiteral("This update requires a compatible OBS version (%1 through major %2)")
+                          .arg(minimum.toString()).arg(maximum));
+            return;
+        }
+    }
     const QString url = platform.value(QStringLiteral("url")).toString();
     const QString sha256 = platform.value(QStringLiteral("sha256")).toString().toLower();
     const qint64 size = platform.value(QStringLiteral("size")).toInteger(-1);
 
-    if (version.isEmpty() || url.isEmpty() || sha256.size() != 64 || size <= 0) {
+    const QUrl binaryUrl(url);
+    if (version.isEmpty() || !binaryUrl.isValid() || binaryUrl.scheme() != "https" || binaryUrl.host().isEmpty() ||
+        !QRegularExpression("^[0-9a-f]{64}$").match(sha256).hasMatch() || size <= 0) {
         setStatus(State::Error, QStringLiteral("Update manifest is incomplete"));
         return;
     }
@@ -263,7 +282,7 @@ void UpdateChecker::installAvailableUpdate()
     }
     // Recheck after acquiring the inter-process lock.
     if (QFile::exists(pendingDirectory_ + "/pending.json")) {
-        close(updateLock_); updateLock_ = -1;
+        postexit::releaseLock(updateLock_); updateLock_ = -1;
         resumePending();
         return;
     }
@@ -282,7 +301,7 @@ void UpdateChecker::handleBinaryReply(QNetworkReply *reply, bool helper)
 {
     const auto unlock = qScopeGuard([this] {
         if (state_ != State::Downloading) {
-            if (updateLock_ >= 0) { close(updateLock_); updateLock_ = -1; }
+            if (updateLock_ >= 0) { postexit::releaseLock(updateLock_); updateLock_ = -1; }
             pluginPayload_.clear();
             helperPayload_.clear();
         }
@@ -309,8 +328,8 @@ void UpdateChecker::handleBinaryReply(QNetworkReply *reply, bool helper)
         return;
     }
 
-    if (!payload.startsWith(QByteArray("\x7f" "ELF", 4))) {
-        setStatus(State::Error, QStringLiteral("Update rejected: not an ELF file"));
+    if (!postexit::validBinary(payload)) {
+        setStatus(State::Error, QStringLiteral("Update rejected: invalid platform binary format"));
         return;
     }
     if (!helper && available_.helper) {
@@ -331,7 +350,7 @@ void UpdateChecker::handleBinaryReply(QNetworkReply *reply, bool helper)
     }
 
     hasAvailable_ = false;
-    if (!launcher_(pendingDirectory_, QFileInfo(targetPath_).absolutePath() + "/bokis-twitch-chat-updater", updateLock_, error)) {
+    if (!launcher_(pendingDirectory_, QFileInfo(targetPath_).absolutePath() + "/" + postexit::helperFileName(), updateLock_, error)) {
         setStatus(State::Error, QStringLiteral("Update saved, but helper failed to start: %1").arg(error));
         return;
     }
@@ -347,8 +366,8 @@ bool UpdateChecker::stageBinaryAtomically(const QByteArray &payload, QString *er
         *errorMessage = QStringLiteral("Pending directory could not be created");
         return false;
     }
-    const QString binaryPath = pendingDir + "/bokis-twitch-chat-plugin.so";
-    const QString helperPath = pendingDir + "/bokis-twitch-chat-updater";
+    const QString binaryPath = pendingDir + "/" + postexit::pluginFileName();
+    const QString helperPath = pendingDir + "/" + postexit::helperFileName();
     QStringList savedPaths;
     auto save = [&](const QString &path, const QByteArray &bytes) {
         if (QFileInfo(path).isSymLink() || QFileInfo(path).canonicalFilePath() == targetPath_) {
@@ -358,7 +377,7 @@ bool UpdateChecker::stageBinaryAtomically(const QByteArray &payload, QString *er
         QSaveFile output(path);
         output.setDirectWriteFallback(false);
         if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size() ||
-            !output.flush() || fsync(output.handle()) != 0 || !output.commit()) {
+            !output.flush() || !postexit::flushFile(output.handle()) || !output.commit()) {
             *errorMessage = QStringLiteral("Atomic staging failed: %1").arg(path);
             return false;
         }
@@ -379,7 +398,7 @@ bool UpdateChecker::stageBinaryAtomically(const QByteArray &payload, QString *er
     if (available_.helper) {
         if (!save(helperPath, helperPayload_)) return false;
         pending.helper = postexit::PendingFile{available_.helper->sha256, helperPath,
-            QFileInfo(targetPath_).absolutePath() + "/bokis-twitch-chat-updater", helperPayload_.size()};
+            QFileInfo(targetPath_).absolutePath() + "/" + postexit::helperFileName(), helperPayload_.size()};
     }
     complete = postexit::writePending(pendingDir, pending, *errorMessage);
     return complete;

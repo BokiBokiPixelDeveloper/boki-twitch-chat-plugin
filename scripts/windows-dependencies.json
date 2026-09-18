@@ -1,0 +1,30 @@
+{
+  "obsSource": {
+    "url": "https://codeload.github.com/obsproject/obs-studio/zip/refs/tags/32.2.2",
+    "sha256": "f15f001f1fa526405318835f44f9910046502f496ebc3a30d5296a5018b831aa"
+  },
+  "obsDeps": {
+    "url": "https://github.com/obsproject/obs-deps/releases/download/2026-07-15/windows-deps-2026-07-15-x64.zip",
+    "sha256": "6f90e9598fa10cff5ad23cdcfae49b87868c07bf896b02cd464582b4ce2f2ba9"
+  },
+  "qt": {
+    "url": "https://github.com/obsproject/obs-deps/releases/download/2026-07-15/windows-deps-qt6-2026-07-15-x64.zip",
+    "sha256": "7c7f985711d80467bdc1795b6592275a27d5b0e5a2c7a61db1f2c1d08d6a5579"
+  },
+  "webp": {
+    "url": "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz",
+    "sha256": "e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564"
+  },
+  "qtwebsockets": {
+    "url": "https://codeload.github.com/qt/qtwebsockets/zip/refs/tags/v6.11.1",
+    "sha256": "d513e05b2b7f0f7b56a031fb966f4fb658824c45aac85be9c7f433409061f7f6"
+  },
+  "qtbase": {
+    "url": "https://codeload.github.com/qt/qtbase/zip/refs/tags/v6.11.1",
+    "sha256": "cdf0b6d7da0181d350c2c5ec96a42ba89c2daa2af56e37c58ead19300abc8c08"
+  },
+  "inno": {
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_5_4/innosetup-6.5.4.exe",
+    "sha256": "fa73bf47a4da250d185d07561c2bfda387e5e20db77e4570004cf6a133cc10b1"
+  }
+}
