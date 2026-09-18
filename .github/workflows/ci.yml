@@ -9,6 +9,10 @@ permissions:
   contents: read
 
 jobs:
+  windows-build:
+    name: Windows build
+    uses: ./.github/workflows/windows-build.yml
+
   linux-build:
     name: Linux build
     runs-on: ubuntu-24.04

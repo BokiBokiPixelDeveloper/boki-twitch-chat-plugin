@@ -1,8 +1,11 @@
 #pragma once
 #include <QString>
+#include <QByteArray>
 #include <functional>
 #include <optional>
+#ifndef _WIN32
 #include <sys/types.h>
+#endif
 
 namespace postexit {
 struct PendingFile {
@@ -18,22 +21,37 @@ QString cacheDirectory();
 QString dataDirectory();
 QString stateDirectory();
 QString modulePath();
+QString platformKey();
+QString pluginFileName();
+QString helperFileName();
+bool validBinary(const QByteArray &bytes);
+bool flushFile(int fd);
+void releaseLock(int fd);
+int duplicateLock(int fd);
 void holdProcessUseLock();
+#ifndef _WIN32
 QString processStart(pid_t pid);
+#endif
 // A persistent lock inode: never unlink a lock file.
 int acquireLock(const QString &path, bool shared = false);
 bool writePending(const QString &directory, const Pending &pending, QString &error);
 Pending readPending(const QString &directory);
 bool launch(const QString &directory, const QString &helper, int lock, QString &error);
+#ifndef _WIN32
 bool waitForProcess(pid_t pid, const QString &start, int pidfd);
-// Optional rename operation permits deterministic I/O failure tests; rollback uses POSIX rename.
+#endif
+// Optional rename operation permits deterministic I/O failure tests; rollback uses the platform backend.
 using RenameOperation = std::function<int(const QString &, const QString &)>;
 struct MappingScan {
     // An inherited /proc/self/fd/N keeps the original executable identity alive after exit.
+#ifdef _WIN32
+    QString executable;
+#else
     QString executable = "/proc/self/exe";
     QString procRoot = "/proc";
     // Deterministic process-exit/PID-reuse tests, called after candidate classification.
     std::function<void(const QString &)> beforeMaps;
+#endif
 };
 bool ensureNotMapped(const QString &target, QString &error, const MappingScan &scan = {});
 bool install(const QString &directory, const QString &backups, const QString &result,

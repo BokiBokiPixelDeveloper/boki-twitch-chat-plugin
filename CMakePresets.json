@@ -34,6 +34,22 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo"
       }
+    },
+    {
+      "name": "windows-x86_64",
+      "displayName": "Windows x86_64 (MSVC)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows-x86_64",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "${sourceDir}/.deps/windows/obs;${sourceDir}/.deps/windows/qt;${sourceDir}/.deps/windows/webp",
+        "ENABLE_TESTS": true
+      }
     }
   ],
   "buildPresets": [
@@ -46,6 +62,11 @@
       "name": "linux-ci-x86_64",
       "configurePreset": "linux-ci-x86_64",
       "jobs": 0
+    },
+    {
+      "name": "windows-x86_64",
+      "configurePreset": "windows-x86_64",
+      "configuration": "RelWithDebInfo"
     }
   ]
 }

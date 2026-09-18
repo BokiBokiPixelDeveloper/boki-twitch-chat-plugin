@@ -16,8 +16,20 @@ string(STRIP "${BOKIS_TWITCH_CHAT_VERSION}" BOKIS_TWITCH_CHAT_VERSION)
 
 find_package(libobs REQUIRED)
 find_package(Qt6 6.9 REQUIRED COMPONENTS Core Gui Network WebSockets)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebpdemux)
+if(WIN32)
+    if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT MSVC OR CMAKE_SYSTEM_PROCESSOR MATCHES "ARM|arm" OR
+       (CMAKE_GENERATOR_PLATFORM AND NOT CMAKE_GENERATOR_PLATFORM STREQUAL "x64"))
+        message(FATAL_ERROR "Windows builds require x86_64 MSVC")
+    endif()
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
+    find_package(WebP CONFIG REQUIRED)
+    set(CHAT_WEBP_TARGET WebP::webpdemux)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebpdemux)
+    set(CHAT_WEBP_TARGET PkgConfig::WEBP)
+endif()
 
 add_library(chat-support STATIC
     src/chat/emote-catalog.cpp
@@ -27,14 +39,24 @@ add_library(chat-support STATIC
 )
 set_target_properties(chat-support PROPERTIES AUTOMOC ON)
 target_include_directories(chat-support PUBLIC src)
-target_link_libraries(chat-support PUBLIC Qt6::Core Qt6::Gui Qt6::Network PkgConfig::WEBP)
+target_link_libraries(chat-support PUBLIC Qt6::Core Qt6::Gui Qt6::Network ${CHAT_WEBP_TARGET})
 target_compile_definitions(chat-support PUBLIC QT_NO_KEYWORDS)
 
-add_library(post-exit-support STATIC src/updater/post-exit.cpp)
+if(WIN32)
+    set(UPDATER_PLATFORM src/updater/post-exit-windows.cpp)
+else()
+    set(UPDATER_PLATFORM src/updater/post-exit.cpp)
+endif()
+add_library(post-exit-support STATIC src/updater/post-exit-shared.cpp ${UPDATER_PLATFORM})
 target_include_directories(post-exit-support PUBLIC src)
 target_link_libraries(post-exit-support PUBLIC Qt6::Core ${CMAKE_DL_LIBS})
-add_executable(bokis-twitch-chat-updater src/updater/helper-main.cpp)
-target_link_libraries(bokis-twitch-chat-updater PRIVATE post-exit-support)
+if(WIN32)
+    target_link_libraries(post-exit-support PUBLIC shell32 ole32 psapi)
+    include(cmake/WindowsHelper.cmake)
+else()
+    add_executable(bokis-twitch-chat-updater src/updater/helper-main.cpp)
+    target_link_libraries(bokis-twitch-chat-updater PRIVATE post-exit-support)
+endif()
 
 add_library(${PROJECT_NAME} MODULE)
 
@@ -76,10 +98,16 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 )
 
 include(GNUInstallDirs)
-install(TARGETS ${PROJECT_NAME} bokis-twitch-chat-updater
-    LIBRARY DESTINATION "lib/obs-plugins"
-    RUNTIME DESTINATION "lib/obs-plugins"
-)
+if(WIN32)
+    install(TARGETS ${PROJECT_NAME} bokis-twitch-chat-updater
+        RUNTIME DESTINATION "bin/64bit" LIBRARY DESTINATION "bin/64bit")
+    install(FILES $<TARGET_FILE:Qt6::WebSockets> DESTINATION "bin/64bit")
+    install(FILES "${CMAKE_SOURCE_DIR}/resources/fonts/OFL.txt" DESTINATION "data/licenses"
+        RENAME "NotoColorEmoji-OFL.txt")
+else()
+    install(TARGETS ${PROJECT_NAME} bokis-twitch-chat-updater
+        LIBRARY DESTINATION "lib/obs-plugins" RUNTIME DESTINATION "lib/obs-plugins")
+endif()
 
 if(ENABLE_TESTS)
     enable_testing()
