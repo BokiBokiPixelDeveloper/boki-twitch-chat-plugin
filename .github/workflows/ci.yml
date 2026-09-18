@@ -25,7 +25,7 @@ jobs:
           pacman -S --noconfirm git cmake ninja obs-studio qt6-base qt6-websockets libwebp python zip
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Configure
         run: cmake --preset linux-ci-x86_64 -DENABLE_TESTS=ON

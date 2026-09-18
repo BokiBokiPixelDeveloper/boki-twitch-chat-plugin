@@ -23,7 +23,7 @@ jobs:
           pacman -S --noconfirm git cmake ninja obs-studio qt6-base qt6-websockets libwebp python zip
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate tag matches VERSION
         shell: bash
@@ -66,7 +66,7 @@ jobs:
     needs: [build-linux, build-windows]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download release payload
         uses: actions/download-artifact@v4
