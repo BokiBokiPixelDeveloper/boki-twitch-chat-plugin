@@ -19,7 +19,28 @@ jobs:
       - name: Build
         run: cmake --build --preset windows-x86_64
       - name: Test
+        id: tests
         run: ctest --test-dir build/windows-x86_64 -C RelWithDebInfo --output-on-failure
+      - name: Print chat test report on failure
+        if: ${{ failure() && steps.tests.outcome == 'failure' }}
+        shell: pwsh
+        run: |
+          $report = 'build/windows-x86_64/tests/chat-tests.txt'
+          if (Test-Path $report) {
+            Get-Content $report
+          } else {
+            Write-Host 'No QtTest report was created. Check LastTest.log for startup or loader errors.'
+          }
+      - name: Upload Windows test diagnostics
+        if: ${{ always() && steps.tests.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-diagnostics
+          if-no-files-found: warn
+          path: |
+            build/windows-x86_64/Testing/Temporary/LastTest.log
+            build/windows-x86_64/Testing/Temporary/LastTestsFailed.log
+            build/windows-x86_64/tests/chat-tests.txt
       - name: Package and compile installer
         shell: pwsh
         run: ./scripts/package-windows.ps1
