@@ -2,7 +2,10 @@
 
 #include <QAbstractTextDocumentLayout>
 #include <QFont>
+#include <QGlyphRun>
+#include <QLoggingCategory>
 #include <QPainter>
+#include <QTextBlock>
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QTextObjectInterface>
@@ -10,6 +13,7 @@
 #include <cmath>
 
 namespace {
+Q_LOGGING_CATEGORY(emojiDiagnostics, "bokis.render.emoji", QtWarningMsg)
 constexpr int emoteObject = QTextFormat::UserObject + 1;
 constexpr int emoteIndex = QTextFormat::UserProperty + 1;
 
@@ -113,6 +117,25 @@ MessageLayout layoutMessage(const ChatMessage &message, const QString &fontFamil
         painter.setRenderHint(QPainter::Antialiasing);
         painter.setRenderHint(QPainter::TextAntialiasing);
         document.drawContents(&painter);
+    }
+    // Opt-in diagnostics from the actual document, not a separately shaped probe.
+    // Leave font-table inspection and glyph enumeration off on the normal path.
+    if (emojiDiagnostics().isDebugEnabled()) {
+        qCDebug(emojiDiagnostics) << "QTextDocument -> QPainter raster -> QImage"
+                                 << "size" << content.size() << "requested families" << font.families();
+        for (auto block = document.begin(); block.isValid(); block = block.next()) {
+            // Document-backed layouts don't store text() themselves; give the
+            // block's range explicitly instead of using glyphRuns' default length.
+            for (const auto &run : block.layout()->glyphRuns(0, block.length() - 1)) {
+                const auto raw = run.rawFont();
+                qCDebug(emojiDiagnostics) << "font" << raw.familyName() << raw.styleName()
+                                         << "px" << raw.pixelSize()
+                                         << "CBDT" << !raw.fontTable("CBDT").isEmpty()
+                                         << "COLR" << !raw.fontTable("COLR").isEmpty()
+                                         << "glyphs" << run.glyphIndexes()
+                                         << "positions" << run.positions() << "bounds" << run.boundingRect();
+            }
+        }
     }
     for (auto &emote : out.emotes) {
         if (emote.overlayBase >= 0)

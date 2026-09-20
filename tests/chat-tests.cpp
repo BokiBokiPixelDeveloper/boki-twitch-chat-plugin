@@ -3,6 +3,7 @@
 #include "renderer/message-layout.hpp"
 
 #include <QBuffer>
+#include <QDir>
 #include <QFile>
 #include <QFontDatabase>
 #include <QGuiApplication>
@@ -19,6 +20,30 @@
 #include <cstring>
 
 namespace {
+struct PixelStats {
+    int visible = 0;
+    int colored = 0;
+    QRect ink;
+};
+
+PixelStats pixelStats(const QImage &image)
+{
+    PixelStats result;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            if (pixel.alpha() <= 100)
+                continue;
+            ++result.visible;
+            result.ink = result.ink.united(QRect(x, y, 1, 1));
+            if (std::max({pixel.red(), pixel.green(), pixel.blue()}) -
+                std::min({pixel.red(), pixel.green(), pixel.blue()}) > 30)
+                ++result.colored;
+        }
+    }
+    return result;
+}
+
 QByteArray fixture(const char *name)
 {
     QFile file(QStringLiteral(FIXTURE_DIR) + QLatin1Char('/') + QLatin1String(name));
@@ -120,7 +145,13 @@ protected:
 
 void ChatTests::initTestCase()
 {
-    QVERIFY(QFontDatabase::addApplicationFont(QStringLiteral(":/bokis-twitch-chat-plugin/fonts/NotoColorEmoji.ttf")) >= 0);
+    const int fontId = QFontDatabase::addApplicationFont(QStringLiteral(":/bokis-twitch-chat-plugin/fonts/NotoColorEmoji.ttf"));
+    QVERIFY(fontId >= 0);
+    const auto families = QFontDatabase::families();
+    qInfo() << "Bundled font families" << QFontDatabase::applicationFontFamilies(fontId)
+            << "Liberation Sans available" << families.contains(QStringLiteral("Liberation Sans"))
+            << "Segoe UI Emoji available" << families.contains(QStringLiteral("Segoe UI Emoji"))
+            << "application emoji overrides" << QFontDatabase::applicationEmojiFontFamilies();
 }
 
 void ChatTests::twitchFragments()
@@ -317,6 +348,12 @@ void ChatTests::coloredUnicode()
     const QRawFont bundled(QStringLiteral(":/bokis-twitch-chat-plugin/fonts/NotoColorEmoji.ttf"),
                            48, QFont::PreferFullHinting);
     QVERIFY(bundled.isValid());
+#ifdef Q_OS_WIN
+    // Both plugin and test must use the Windows-compatible resource, not just
+    // a machine-installed font with the same family name.
+    QVERIFY(!bundled.fontTable("loca").isEmpty());
+    QVERIFY(!bundled.fontTable("glyf").isEmpty());
+#endif
     const auto runs = shaped.glyphRuns();
     QCOMPARE(runs.size(), 1);
     const auto &run = runs.first();
@@ -343,22 +380,48 @@ void ChatTests::coloredUnicode()
     const auto joined = layoutMessage(fragmented, QStringLiteral("Liberation Sans"), 500, 48, 2.5);
     QCOMPARE(joined.text, layout.text);
 
-    int coloredPixels = 0;
-    int visiblePixels = 0;
-    for (int y = 0; y < layout.text.height(); ++y) {
-        for (int x = 0; x < layout.text.width(); ++x) {
-            const QColor pixel = layout.text.pixelColor(x, y);
-            if (pixel.alpha() > 100)
-                ++visiblePixels;
-            if (pixel.alpha() > 100 && std::max({pixel.red(), pixel.green(), pixel.blue()}) -
-                std::min({pixel.red(), pixel.green(), pixel.blue()}) > 30)
-                ++coloredPixels;
-        }
+    const auto pixels = pixelStats(layout.text);
+    // Compare diagnostics for an isolated glyph and the real document. Generous
+    // padding on the probe helps distinguish clipping from missing color data.
+    QImage probe(256, 256, QImage::Format_ARGB32_Premultiplied);
+    probe.fill(Qt::transparent);
+    {
+        QPainter painter(&probe);
+        painter.setRenderHint(QPainter::TextAntialiasing);
+        painter.setPen(Qt::white);
+        shaped.draw(&painter, QPointF(64, 64));
     }
+    const auto probePixels = pixelStats(probe);
+    const auto plain = layoutMessage({{}, text, Qt::white}, QStringLiteral("Liberation Sans"), 500, 48, 0);
+    const auto plainPixels = pixelStats(plain.text);
+    qInfo() << QTest::currentDataTag() << "Qt" << qVersion()
+            << "QPA" << QGuiApplication::platformName()
+            << "isolated font" << run.rawFont().familyName()
+            << "px" << run.rawFont().pixelSize() << "glyphs" << run.glyphIndexes()
+            << "CBDT" << !run.rawFont().fontTable("CBDT").isEmpty()
+            << "COLR" << !run.rawFont().fontTable("COLR").isEmpty()
+            << "isolated visible/colored/ink" << probePixels.visible << probePixels.colored << probePixels.ink
+            << "document without outline" << plainPixels.visible << plainPixels.colored << plainPixels.ink
+            << "document with outline" << pixels.visible << pixels.colored << pixels.ink
+            << "image size" << layout.text.size();
     // Noto intentionally draws eyes and family pictograms mostly in grayscale.
-    if (text != QStringLiteral("👀") && text != QStringLiteral("👨‍👩‍👧‍👦"))
-        QVERIFY2(coloredPixels > 20, qPrintable(QStringLiteral("No color pixels for %1").arg(text)));
-    QVERIFY(visiblePixels > 400);
+    const bool expectColor = text != QStringLiteral("👀") && text != QStringLiteral("👨‍👩‍👧‍👦");
+    bool saveImages = pixels.visible <= 400 || (expectColor && pixels.colored <= 20);
+#ifdef Q_OS_WIN
+    saveImages = true;
+#endif
+    if (saveImages) {
+        QVERIFY(QDir().mkpath(QStringLiteral("emoji-diagnostics")));
+        const auto base = QStringLiteral("emoji-diagnostics/%1").arg(QString::fromLatin1(QTest::currentDataTag()));
+        QVERIFY(layout.text.save(base + QStringLiteral("-document.png")));
+        QVERIFY(plain.text.save(base + QStringLiteral("-without-outline.png")));
+        QVERIFY(probe.save(base + QStringLiteral("-isolated.png")));
+    }
+    const auto detail = QStringLiteral("%1: visible=%2 (required >400), colored=%3 (required >20 for colored fixtures)")
+                            .arg(text).arg(pixels.visible).arg(pixels.colored);
+    if (expectColor)
+        QVERIFY2(pixels.colored > 20, qPrintable(detail));
+    QVERIFY2(pixels.visible > 400, qPrintable(detail));
     // Total image width also contains the username separator and document margins;
     // it cannot establish whether the emoji was shaped as a single unit.
 }

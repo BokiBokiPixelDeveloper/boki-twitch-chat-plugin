@@ -79,6 +79,23 @@ see only the bundled font; the new semantic checks passed in both environments.
 This reproduces the reported CI failure without a shaping error or Qt version
 change. The exact runner font inventory was not inspected.
 
+The later Windows pixel failures are separate from that width assertion. Windows
+now embeds Qt's recommended `NotoColorEmoji_WindowsCompatible.ttf` from the same
+upstream revision (see `resources/fonts/README.md`); Linux retains its original
+resource. This addresses a font-format compatibility suspect, not a confirmed
+DirectWrite defect. A native Windows run is required to confirm the two failures
+are resolved. Neither pixel threshold is relaxed.
+
+Each emoji row reports the actual isolated font/glyph, color-font tables, image
+size, visible/color pixel counts, and ink bounds for isolated rendering and the
+production document with/without outline. Windows saves those three PNGs for
+every row in `tests/emoji-diagnostics/` under the build directory; Linux saves
+them on pixel failure. CI includes them in `windows-test-diagnostics`.
+`QT_LOGGING_RULES=bokis.render.emoji.debug=true` additionally traces the real
+document's font runs and glyph positions. This is enabled for Windows tests only;
+production logging is off by default. General Qt plugin discovery logging is no
+longer enabled.
+
 To exercise a minimal font environment without modifying system font settings:
 
 ```bash

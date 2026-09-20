@@ -16,7 +16,11 @@ string(STRIP "${BOKIS_TWITCH_CHAT_VERSION}" BOKIS_TWITCH_CHAT_VERSION)
 
 find_package(libobs REQUIRED)
 find_package(Qt6 6.9 REQUIRED COMPONENTS Core Gui Network WebSockets)
+set(CHAT_EMOJI_RESOURCE "${CMAKE_CURRENT_SOURCE_DIR}/resources/emoji.qrc")
 if(WIN32)
+    # Use Qt's recommended Windows-compatible TrueType wrapper around the same
+    # Noto bitmap glyphs. Keep the existing FreeType resource on Linux.
+    set(CHAT_EMOJI_RESOURCE "${CMAKE_CURRENT_SOURCE_DIR}/resources/emoji-windows.qrc")
     if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT MSVC OR CMAKE_SYSTEM_PROCESSOR MATCHES "ARM|arm" OR
        (CMAKE_GENERATOR_PLATFORM AND NOT CMAKE_GENERATOR_PLATFORM STREQUAL "x64"))
         message(FATAL_ERROR "Windows builds require x86_64 MSVC")
@@ -65,7 +69,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/renderer/chat-source.cpp
     src/twitch/twitch-client.cpp
     src/updater/update-checker.cpp
-    resources/emoji.qrc
+    ${CHAT_EMOJI_RESOURCE}
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE src)

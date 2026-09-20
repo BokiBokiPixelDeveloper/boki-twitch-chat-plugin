@@ -41,6 +41,7 @@ jobs:
             build/windows-x86_64/Testing/Temporary/LastTest.log
             build/windows-x86_64/Testing/Temporary/LastTestsFailed.log
             build/windows-x86_64/tests/chat-tests.txt
+            build/windows-x86_64/tests/emoji-diagnostics/*.png
       - name: Package and compile installer
         shell: pwsh
         run: ./scripts/package-windows.ps1
