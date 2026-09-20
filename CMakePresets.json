@@ -47,7 +47,7 @@
         "rhs": "Windows"
       },
       "cacheVariables": {
-        "CMAKE_PREFIX_PATH": "${sourceDir}/.deps/windows/obs;${sourceDir}/.deps/windows/qt;${sourceDir}/.deps/windows/webp",
+        "CMAKE_PREFIX_PATH": "${sourceDir}/.deps/windows/obs;${sourceDir}/.deps/windows/qt;${sourceDir}/.deps/windows/webp;${sourceDir}/.deps/windows/prebuilt",
         "ENABLE_TESTS": true
       }
     }

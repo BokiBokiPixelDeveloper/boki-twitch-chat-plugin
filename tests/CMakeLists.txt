@@ -1,12 +1,13 @@
 find_package(Qt6 6.9 REQUIRED COMPONENTS Test)
-add_executable(chat-tests chat-tests.cpp chat-tests.hpp ../resources/emoji.qrc)
+add_executable(chat-tests chat-tests.cpp chat-tests.hpp ${CHAT_EMOJI_RESOURCE})
 set_target_properties(chat-tests PROPERTIES AUTOMOC ON AUTORCC ON)
 target_link_libraries(chat-tests PRIVATE chat-support Qt6::Test)
 target_compile_definitions(chat-tests PRIVATE FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
-add_test(NAME chat-tests COMMAND chat-tests)
+add_test(NAME chat-tests COMMAND chat-tests -v1 -o -,txt
+    -o "${CMAKE_CURRENT_BINARY_DIR}/chat-tests.txt,txt")
 if(WIN32)
     set_tests_properties(chat-tests PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins" TIMEOUT 30)
+        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1;QT_LOGGING_RULES=bokis.render.emoji.debug=true" TIMEOUT 30)
 else()
     set_tests_properties(chat-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()

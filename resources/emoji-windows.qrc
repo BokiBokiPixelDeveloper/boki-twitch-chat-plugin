@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/bokis-twitch-chat-plugin">
+    <file alias="fonts/NotoColorEmoji.ttf">fonts/NotoColorEmoji_WindowsCompatible.ttf</file>
+    <file>fonts/OFL.txt</file>
+  </qresource>
+</RCC>
