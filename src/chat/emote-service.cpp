@@ -140,7 +140,8 @@ void EmoteService::start(const std::shared_ptr<Pending> &pending)
         if (fragment.imageUrl.isEmpty() || fragment.image)
             continue;
         ++pending->remaining;
-        images_.request(fragment.imageUrl, [this, weak, i, fallback = fragment.fallbackUrl, url = fragment.imageUrl](ImageAsset image) {
+        images_.request(fragment.imageUrl, [this, weak, i, fallback = fragment.fallbackUrl, url = fragment.imageUrl,
+                                           provider = fragment.provider](ImageAsset image) {
             const auto job = weak.lock();
             if (!job || job->delivered)
                 return;
@@ -154,10 +155,10 @@ void EmoteService::start(const std::shared_ptr<Pending> &pending)
                     flush();
             };
             if (!image && !fallback.isEmpty() && fallback != url)
-                images_.request(fallback, std::move(complete));
+                images_.request(fallback, std::move(complete), provider);
             else
                 complete(std::move(image));
-        });
+        }, fragment.provider);
     }
     for (size_t i = 0; i < pending->message.media.size(); ++i) {
         if (pending->message.media[i].imageUrl.isEmpty())

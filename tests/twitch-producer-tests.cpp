@@ -1,11 +1,14 @@
 #include "twitch-producer-tests.hpp"
 #include "core/plugin-runtime.hpp"
+#include "core/event-validation.hpp"
 #include "renderer/native-event-adapter.hpp"
+#include "twitch/event-normalizer.hpp"
 #include <QBuffer>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QTest>
 #include <thread>
 
@@ -81,7 +84,7 @@ protected:
             else response.bytes = json({{"client_id", "test-client"}, {"user_id", userId}, {"login", "broadcaster"}, {"scopes", scopes}});
         } else if (path == QStringLiteral("/helix/users")) {
             ++lookups; response.bytes = R"({"data":[{"id":"100","login":"broadcaster"}]})";
-        } else if (path == QStringLiteral("/helix/eventsub/subscriptions")) {
+        } else if (path == QStringLiteral("/helix/eventsub/subscriptions") || path == QStringLiteral("/eventsub/subscriptions")) {
             const auto body = QJsonDocument::fromJson(outgoing->readAll()).object();
             subscriptions.push_back(body); response.status = 202;
             if (body["type"] == QStringLiteral("channel.follow") && followFailures-- > 0) response.status = followStatus;
@@ -123,11 +126,11 @@ struct Harness {
     QStringList logs;
     QList<TwitchTokens> tokens;
     int browsers = 0;
-    TwitchClient::Dependencies dependencies()
+    TwitchClient::Dependencies dependencies(EventSubConnectionSettings settings = {})
     {
         return {&network, [this] {
             auto socket = std::make_unique<FakeSocket>(); sockets.push_back(socket.get()); return socket;
-        }, [this](const QUrl &) { ++browsers; }};
+        }, [this](const QUrl &) { ++browsers; }, std::move(settings)};
     }
 };
 TwitchConfiguration configuration() { return {QStringLiteral("test-client"), QStringLiteral("broadcaster"), QStringLiteral("synthetic-access"), QStringLiteral("synthetic-refresh")}; }
@@ -137,6 +140,90 @@ void append(EventSubscription &subscription, std::vector<EventPtr> &events)
     events.insert(events.end(), batch.events.begin(), batch.events.end());
 }
 } // namespace
+
+void TwitchProducerTests::localEndpointSettingsRejectUnsafeOverrides()
+{
+    const auto oldUrl = qgetenv("BOKIS_EVENTSUB_TEST_URL");
+    const auto oldChannel = qgetenv("BOKIS_EVENTSUB_TEST_CHANNEL_ID");
+    auto restore = qScopeGuard([&] {
+        if (oldUrl.isEmpty()) qunsetenv("BOKIS_EVENTSUB_TEST_URL"); else qputenv("BOKIS_EVENTSUB_TEST_URL", oldUrl);
+        if (oldChannel.isEmpty()) qunsetenv("BOKIS_EVENTSUB_TEST_CHANNEL_ID"); else qputenv("BOKIS_EVENTSUB_TEST_CHANNEL_ID", oldChannel);
+    });
+    qunsetenv("BOKIS_EVENTSUB_TEST_URL"); qunsetenv("BOKIS_EVENTSUB_TEST_CHANNEL_ID");
+    QCOMPARE(readEventSubConnectionSettings().mode, EventSubConnectionMode::Production);
+    qputenv("BOKIS_EVENTSUB_TEST_URL", "ws://127.0.0.1:8099/ws"); qputenv("BOKIS_EVENTSUB_TEST_CHANNEL_ID", "100");
+    const auto local = readEventSubConnectionSettings();
+    QCOMPARE(local.mode, EventSubConnectionMode::LocalTest);
+    QCOMPARE(local.subscriptionUrl.toString(), QStringLiteral("http://127.0.0.1:8099/eventsub/subscriptions"));
+    qputenv("BOKIS_EVENTSUB_TEST_URL", "ws://example.test:8099/ws");
+    QCOMPARE(readEventSubConnectionSettings().mode, EventSubConnectionMode::Invalid);
+    qputenv("BOKIS_EVENTSUB_TEST_URL", "wss://127.0.0.1:8099/ws");
+    QCOMPARE(readEventSubConnectionSettings().mode, EventSubConnectionMode::Invalid);
+    qputenv("BOKIS_EVENTSUB_TEST_URL", " ws://127.0.0.1:8099/ws");
+    QCOMPARE(readEventSubConnectionSettings().mode, EventSubConnectionMode::Invalid);
+    qputenv("BOKIS_EVENTSUB_TEST_URL", "ws://[::1]:8099/ws");
+    QCOMPARE(readEventSubConnectionSettings().mode, EventSubConnectionMode::LocalTest);
+    qputenv("BOKIS_EVENTSUB_TEST_URL", "ws://localhost:8099/ws");
+    QCOMPARE(readEventSubConnectionSettings().mode, EventSubConnectionMode::Invalid);
+}
+
+void TwitchProducerTests::localEndpointUsesExistingPipelineWithoutCredentials()
+{
+    EventSubConnectionSettings settings;
+    settings.mode = EventSubConnectionMode::LocalTest;
+    settings.websocketUrl = QUrl(QStringLiteral("ws://127.0.0.1:8099/ws"));
+    settings.subscriptionUrl = QUrl(QStringLiteral("http://127.0.0.1:8099/eventsub/subscriptions"));
+    settings.channelId = QStringLiteral("100");
+    Harness h; EventDispatcher dispatcher; auto consumer = dispatcher.subscribe();
+    TwitchClient client(dispatcher, [&](QString log) { h.logs.push_back(log); },
+        [&](TwitchTokens tokens) { h.tokens.push_back(std::move(tokens)); }, h.dependencies(settings));
+    client.configure({}); client.startOrResume();
+    QTRY_COMPARE(h.sockets.size(), 1);
+    QCOMPARE(h.sockets[0]->url, settings.websocketUrl);
+    h.sockets[0]->deliver(welcome());
+    QTRY_COMPARE(h.network.subscriptions.size(), 8);
+    QCOMPARE(h.network.validations, 0); QCOMPARE(h.network.lookups, 0);
+    QVERIFY(h.tokens.empty()); QCOMPARE(h.browsers, 0);
+    for (const auto &request : h.network.requests) {
+        if (request.url().path() == QStringLiteral("/eventsub/subscriptions")) {
+            QCOMPARE(request.url(), settings.subscriptionUrl);
+            QCOMPARE(request.rawHeader("Client-Id"), QByteArray("bokis-local-eventsub-test"));
+            QVERIFY(request.rawHeader("Authorization").isEmpty());
+        }
+    }
+    const auto normalized = normalizeTwitchEvent(eventAt(4), QDateTime::currentDateTimeUtc(), 1, 0);
+    QVERIFY(normalized.event);
+    auto directEvent = *normalized.event;
+    QCOMPARE(validateEvent(directEvent).disposition, ValidationDisposition::Accepted);
+    h.sockets[0]->deliver(eventAt(4));
+    QTest::qWait(50);
+    const auto batch = consumer.takeBatch();
+    QVERIFY2(!batch.events.empty(), qPrintable(h.logs.join(QStringLiteral(" | "))));
+    QVERIFY(h.logs.join(' ').contains(QStringLiteral("Development endpoint override active")));
+    h.sockets[0]->deliver(R"({"metadata":{"message_type":"session_reconnect"},"payload":{"session":{"reconnect_url":"ws://127.0.0.1:8099/ws?reconnect_id=test"}}})");
+    QCOMPARE(h.sockets.size(), 2);
+    h.sockets[1]->deliver(welcome(QStringLiteral("local-session-two")));
+    h.sockets[1]->deliver(R"({"metadata":{"message_type":"session_reconnect"},"payload":{"session":{"reconnect_url":"ws://example.test:8099/ws"}}})");
+    QCOMPARE(h.sockets.size(), 2);
+}
+
+void TwitchProducerTests::dangerousTextStaysSemanticThroughLivePipeline()
+{
+    Harness h; EventDispatcher dispatcher; auto consumer = dispatcher.subscribe();
+    TwitchClient client(dispatcher, {}, {}, h.dependencies()); client.configure(configuration()); client.startOrResume();
+    QTRY_COMPARE(h.sockets.size(), 1); h.sockets[0]->deliver(welcome());
+    auto root = fixtures()[0].toObject()["envelope"].toObject();
+    auto payload = root["payload"].toObject(); auto event = payload["event"].toObject();
+    auto message = event["message"].toObject();
+    const QString text = QStringLiteral("<script>alert(1)</script><img src=x onerror=alert(1)><svg onload=alert(1)><iframe src=x>");
+    message["text"] = text; message["fragments"] = QJsonArray{{QJsonObject{{"type", "text"}, {"text", text}}}};
+    event["message"] = message; payload["event"] = event; root["payload"] = payload;
+    h.sockets[0]->deliver(json(root));
+    EventPtr received;
+    QTRY_VERIFY_WITH_TIMEOUT(([&] { auto batch = consumer.takeBatch(); if (!batch.events.empty()) received = batch.events.front(); return bool(received); })(), 3000);
+    QCOMPARE(std::get<ChatMessage>(received->payload).text, text);
+    QVERIFY(std::get<ChatMessage>(received->payload).media.empty());
+}
 
 void TwitchProducerTests::allEventsThroughLiveProducer()
 {
@@ -407,7 +494,7 @@ void TwitchProducerTests::gifUsesTheSameDispatcherEvent()
     OrderedEventPipeline pipeline(dispatcher, {}, &h.network); pipeline.setChannel(QStringLiteral("100"), 1);
     auto root = QJsonDocument::fromJson(eventAt(0)).object(); auto payload = root["payload"].toObject(); auto event = payload["event"].toObject();
     event["message"] = QJsonObject{{"text", "GIF"}, {"fragments", QJsonArray{QJsonObject{{"type", "gif"}, {"text", "GIF"},
-        {"gif", QJsonObject{{"url", "https://example.test/legacy.gif"}}}}}}};
+        {"gif", QJsonObject{{"url", "https://static-cdn.jtvnw.net/legacy.gif"}}}}}}};
     payload["event"] = event; root["payload"] = payload;
     pipeline.ingest(json(root)); std::vector<EventPtr> events;
     QTRY_VERIFY((append(consumer, events), events.size() == 1));

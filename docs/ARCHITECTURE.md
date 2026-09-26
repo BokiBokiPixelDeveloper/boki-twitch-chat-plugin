@@ -21,11 +21,22 @@ attach independent consumer mailboxes; conflicting settings produce a visible
 status instead of a second connection. Future consumers subscribe to the same
 runtime. See [the integration report](TWITCH_PRODUCER_INTEGRATION.md).
 
+Built-in synthetic events are already normalized, but join the same
+`OrderedEventPipeline` before ingress validation. `EventHeader::origin`
+distinguishes production, local transport, and synthetic events for diagnostics
+without changing consumer behavior. See [event testing](EVENT_TESTING.md).
+
 ```text
 Twitch Device Flow / EventSub
             |
             v
    Normalized PluginEvent
+            |
+   Central validation policy
+            |
+   Provider-safe enrichment
+            |
+    Final validation/freeze
             |
       Message Bus/Core
       /             \

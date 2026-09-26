@@ -36,7 +36,7 @@ else()
 endif()
 
 find_package(Threads REQUIRED)
-add_library(event-core STATIC src/core/event-types.cpp src/core/event-dispatcher.cpp)
+add_library(event-core STATIC src/core/event-types.cpp src/core/event-dispatcher.cpp src/core/event-validation.cpp)
 target_include_directories(event-core PUBLIC src)
 target_link_libraries(event-core PUBLIC Qt6::Core Qt6::Gui Threads::Threads)
 target_compile_definitions(event-core PUBLIC QT_NO_KEYWORDS)
@@ -52,12 +52,14 @@ add_library(chat-support STATIC
 )
 set_target_properties(chat-support PROPERTIES AUTOMOC ON)
 target_include_directories(chat-support PUBLIC src)
-target_link_libraries(chat-support PUBLIC Qt6::Core Qt6::Gui Qt6::Network ${CHAT_WEBP_TARGET})
+target_link_libraries(chat-support PUBLIC event-core Qt6::Core Qt6::Gui Qt6::Network ${CHAT_WEBP_TARGET})
 target_compile_definitions(chat-support PUBLIC QT_NO_KEYWORDS)
 
 add_library(twitch-backend STATIC
     src/core/ordered-event-pipeline.cpp
     src/core/plugin-runtime.cpp
+    src/core/synthetic-event-producer.cpp
+    src/twitch/eventsub-connection-settings.cpp
     src/twitch/eventsub-socket.cpp
     src/twitch/twitch-client.cpp
 )

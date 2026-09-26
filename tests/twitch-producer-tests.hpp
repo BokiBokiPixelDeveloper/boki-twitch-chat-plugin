@@ -22,4 +22,7 @@ private Q_SLOTS:
     void gifUsesTheSameDispatcherEvent();
     void changedSettingsReuseTheRuntime();
     void slowSourceResubscribesWithoutASecondConnection();
+    void localEndpointSettingsRejectUnsafeOverrides();
+    void localEndpointUsesExistingPipelineWithoutCredentials();
+    void dangerousTextStaysSemanticThroughLivePipeline();
 };

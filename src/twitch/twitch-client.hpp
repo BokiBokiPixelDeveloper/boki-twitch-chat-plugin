@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/ordered-event-pipeline.hpp"
+#include "twitch/eventsub-connection-settings.hpp"
 #include "twitch/eventsub-socket.hpp"
 #include <QJsonObject>
 #include <QNetworkReply>
@@ -24,6 +25,7 @@ public:
         QNetworkAccessManager *network = nullptr;
         std::function<std::unique_ptr<EventSubSocket>()> socketFactory;
         std::function<void(QUrl)> openBrowser;
+        EventSubConnectionSettings connectionSettings;
     };
     TwitchClient(EventDispatcher &dispatcher, LogCallback log, TokenCallback tokens, Dependencies dependencies);
     ~TwitchClient() override;
@@ -34,6 +36,8 @@ public:
     [[nodiscard]] QString status() const { return statusText_; }
     [[nodiscard]] QString authenticatedLogin() const { return userLogin_; }
     [[nodiscard]] QString broadcasterId() const { return broadcasterId_; }
+    [[nodiscard]] bool isLocalTestMode() const { return connectionSettings_.mode == EventSubConnectionMode::LocalTest; }
+    [[nodiscard]] bool hasConnectionConfigurationError() const { return connectionSettings_.mode == EventSubConnectionMode::Invalid; }
     [[nodiscard]] const QHash<QString, TwitchSubscriptionState> &subscriptions() const { return subscriptions_; }
 private:
     using ReplyCallback = std::function<void(int, QJsonObject)>;
@@ -45,7 +49,7 @@ private:
     void finishAuth(const QJsonObject &json);
     void pollDeviceToken();
     void resolveBroadcaster();
-    void connectEventSub(const QUrl &url = QUrl(QStringLiteral("wss://eventsub.wss.twitch.tv/ws")), bool handoff = false);
+    void connectEventSub(const QUrl &url, bool handoff = false);
     void handleEventSubMessage(EventSubSocket *sender, const QString &payload);
     void subscribeEvents();
     void subscribeOne(QString type, QString version, QJsonObject condition, int attempt = 0);
@@ -65,6 +69,7 @@ private:
     QTimer devicePollTimer_, reconnectTimer_, watchdog_, validationTimer_, handoffTimer_;
     QSet<QNetworkReply *> replies_;
     TwitchConfiguration configuration_;
+    EventSubConnectionSettings connectionSettings_;
     QSet<QString> scopes_;
     QHash<QString, TwitchSubscriptionState> subscriptions_;
     QString userId_, userLogin_, broadcasterId_, deviceCode_, sessionId_;

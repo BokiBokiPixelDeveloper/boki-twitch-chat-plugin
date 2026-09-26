@@ -34,6 +34,13 @@ constexpr const char *S_GIF_SIZE = "gif_size";
 constexpr const char *S_GIF_SPEED = "gif_speed";
 constexpr const char *S_GIF_LIFETIME = "gif_lifetime";
 constexpr const char *S_AUTO_UPDATE_CHECK = "auto_update_check";
+constexpr const char *S_EVENT_TEST_ENABLED = "event_test_enabled";
+constexpr const char *S_TEST_DISPLAY_NAME = "event_test_display_name";
+constexpr const char *S_TEST_CHAT_TEXT = "event_test_chat_text";
+constexpr const char *S_TEST_CHEER_BITS = "event_test_cheer_bits";
+constexpr const char *S_TEST_RAID_VIEWERS = "event_test_raid_viewers";
+constexpr const char *S_TEST_GIFT_COUNT = "event_test_gift_count";
+constexpr const char *S_TEST_RESUB_MONTHS = "event_test_resub_months";
 
 bool buttonConnect(obs_properties_t *, obs_property_t *, void *data)
 {
@@ -50,6 +57,28 @@ bool buttonTestMessage(obs_properties_t *, obs_property_t *, void *data)
 bool buttonTestGif(obs_properties_t *, obs_property_t *, void *data)
 {
     static_cast<ChatSource *>(data)->addTestGif();
+    return false;
+}
+
+bool eventTestModeChanged(void *data, obs_properties_t *, obs_property_t *, obs_data_t *settings)
+{
+    static_cast<ChatSource *>(data)->setEventTestEnabled(obs_data_get_bool(settings, S_EVENT_TEST_ENABLED));
+    return true;
+}
+
+bool buttonSyntheticEvent(obs_properties_t *, obs_property_t *property, void *data)
+{
+    const QString name = QString::fromUtf8(obs_property_name(property));
+    const std::pair<const char *, SyntheticEventKind> actions[] = {
+        {"event_test_chat", SyntheticEventKind::ChatMessage}, {"event_test_delete", SyntheticEventKind::MessageDeleted},
+        {"event_test_clear", SyntheticEventKind::ChatCleared}, {"event_test_follow", SyntheticEventKind::Follow},
+        {"event_test_subscription", SyntheticEventKind::Subscription}, {"event_test_resubscription", SyntheticEventKind::Resubscription},
+        {"event_test_gift", SyntheticEventKind::GiftSubscription}, {"event_test_community_gift", SyntheticEventKind::CommunityGiftSubscription},
+        {"event_test_cheer", SyntheticEventKind::Cheer}, {"event_test_raid", SyntheticEventKind::Raid}};
+    for (const auto &[key, kind] : actions) if (name == QLatin1String(key)) {
+        static_cast<ChatSource *>(data)->injectSyntheticEvent(kind);
+        break;
+    }
     return false;
 }
 
@@ -151,6 +180,13 @@ void ChatSource::update(obs_data_t *settings)
     channel_ = QString::fromUtf8(obs_data_get_string(settings, S_CHANNEL));
     accessToken_ = QString::fromUtf8(obs_data_get_string(settings, S_ACCESS_TOKEN));
     refreshToken_ = QString::fromUtf8(obs_data_get_string(settings, S_REFRESH_TOKEN));
+    eventTestEnabled_ = obs_data_get_bool(settings, S_EVENT_TEST_ENABLED);
+    eventTestValues_.displayName = QString::fromUtf8(obs_data_get_string(settings, S_TEST_DISPLAY_NAME));
+    eventTestValues_.chatText = QString::fromUtf8(obs_data_get_string(settings, S_TEST_CHAT_TEXT));
+    eventTestValues_.cheerBits = static_cast<int>(obs_data_get_int(settings, S_TEST_CHEER_BITS));
+    eventTestValues_.raidViewers = static_cast<int>(obs_data_get_int(settings, S_TEST_RAID_VIEWERS));
+    eventTestValues_.giftCount = static_cast<int>(obs_data_get_int(settings, S_TEST_GIFT_COUNT));
+    eventTestValues_.resubMonths = static_cast<int>(obs_data_get_int(settings, S_TEST_RESUB_MONTHS));
 
     canvasWidth_ = std::clamp<uint32_t>(canvasWidth_, 320, 7680);
     canvasHeight_ = std::clamp<uint32_t>(canvasHeight_, 240, 4320);
@@ -164,9 +200,27 @@ void ChatSource::update(obs_data_t *settings)
     maxMessages_ = std::clamp(maxMessages_, 4, 300);
     maxGifs_ = std::clamp(maxGifs_, 0, 30);
     gifLifetimeSeconds_ = std::clamp(gifLifetimeSeconds_, 2.0f, 120.0f);
+    eventTestValues_.cheerBits = std::clamp(eventTestValues_.cheerBits, 1, 1000000);
+    eventTestValues_.raidViewers = std::clamp(eventTestValues_.raidViewers, 0, 10000000);
+    eventTestValues_.giftCount = std::clamp(eventTestValues_.giftCount, 1, 10000);
+    eventTestValues_.resubMonths = std::clamp(eventTestValues_.resubMonths, 1, 12000);
 
     adapter_->configure({fontFamily_, fontWeight_, outlineWidthPx_, minFontPx_, maxFontPx_, minSpeed_, maxSpeed_});
     backend_->configure({clientId_, channel_, accessToken_, refreshToken_});
+    backend_->setEventTestEnabled(eventTestEnabled_);
+}
+
+void ChatSource::setEventTestEnabled(bool enabled)
+{
+    std::lock_guard lock(sourceMutex_);
+    eventTestEnabled_ = enabled;
+    backend_->setEventTestEnabled(enabled);
+}
+
+void ChatSource::injectSyntheticEvent(SyntheticEventKind kind)
+{
+    std::lock_guard lock(sourceMutex_);
+    if (eventTestEnabled_) backend_->injectSyntheticEvent(kind, eventTestValues_);
 }
 
 void ChatSource::enqueueMessage(ChatMessage message)
@@ -618,6 +672,27 @@ obs_properties_t *ChatSource::properties()
     obs_properties_add_float_slider(gifs, S_GIF_LIFETIME, "GIF lifetime (seconds)", 2.0, 60.0, 0.5);
     obs_properties_add_button2(gifs, "test_gif", "Test native GIF animation", buttonTestGif, this);
     obs_properties_add_group(props, "gif_group", "GIFs", OBS_GROUP_NORMAL, gifs);
+
+    obs_properties_t *eventTesting = obs_properties_create();
+    auto *enabled = obs_properties_add_bool(eventTesting, S_EVENT_TEST_ENABLED, "Enable Event Test Mode");
+    obs_property_set_modified_callback2(enabled, eventTestModeChanged, this);
+    obs_properties_add_text(eventTesting, S_TEST_DISPLAY_NAME, "Test display name", OBS_TEXT_DEFAULT);
+    obs_properties_add_text(eventTesting, S_TEST_CHAT_TEXT, "Test chat message", OBS_TEXT_DEFAULT);
+    obs_properties_add_int(eventTesting, S_TEST_CHEER_BITS, "Cheer amount", 1, 1000000, 1);
+    obs_properties_add_int(eventTesting, S_TEST_RAID_VIEWERS, "Raid viewer count", 0, 10000000, 1);
+    obs_properties_add_int(eventTesting, S_TEST_GIFT_COUNT, "Community gift count", 1, 10000, 1);
+    obs_properties_add_int(eventTesting, S_TEST_RESUB_MONTHS, "Resubscription months", 1, 12000, 1);
+    const std::pair<const char *, const char *> actions[] = {
+        {"event_test_chat", "Test Chat Message"}, {"event_test_delete", "Test Delete Message"},
+        {"event_test_clear", "Test Clear Chat"}, {"event_test_follow", "Test Follow"},
+        {"event_test_subscription", "Test Subscription"}, {"event_test_resubscription", "Test Resubscription"},
+        {"event_test_gift", "Test Gift Subscription"}, {"event_test_community_gift", "Test Community Gift Subscription"},
+        {"event_test_cheer", "Test Cheer"}, {"event_test_raid", "Test Raid"}};
+    for (const auto &[key, label] : actions) {
+        auto *button = obs_properties_add_button2(eventTesting, key, label, buttonSyntheticEvent, this);
+        obs_property_set_enabled(button, eventTestEnabled_);
+    }
+    obs_properties_add_group(props, "event_testing_group", "Event Testing", OBS_GROUP_NORMAL, eventTesting);
 
     obs_properties_t *updates = obs_properties_create();
     const QByteArray versionInfo = QStringLiteral("Installed: %1").arg(QString::fromUtf8(BOKIS_TWITCH_CHAT_VERSION)).toUtf8();

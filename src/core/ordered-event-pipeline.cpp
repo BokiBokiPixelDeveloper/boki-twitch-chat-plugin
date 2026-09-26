@@ -1,4 +1,5 @@
 #include "core/ordered-event-pipeline.hpp"
+#include "core/event-validation.hpp"
 #include "twitch/event-normalizer.hpp"
 #include <QPointer>
 #include <QThread>
@@ -41,10 +42,11 @@ void OrderedEventPipeline::stop()
     pending_.clear();
     seen_.clear();
     seenOrder_.clear();
+    validationFailures_ = 0;
     emotes_.clear();
 }
 
-void OrderedEventPipeline::setChannel(QString channelId, std::uint64_t generation)
+void OrderedEventPipeline::setChannel(QString channelId, std::uint64_t generation, bool loadThirdPartyEmotes)
 {
     Q_ASSERT(QThread::currentThread() == thread());
     if (channelId_ == channelId && generation_ == generation)
@@ -52,19 +54,40 @@ void OrderedEventPipeline::setChannel(QString channelId, std::uint64_t generatio
     stop();
     generation_ = generation;
     channelId_ = std::move(channelId);
-    emotes_.setChannel(channelId_);
+    if (loadThirdPartyEmotes) emotes_.setChannel(channelId_);
 }
 
-IngestResult OrderedEventPipeline::ingest(const QByteArray &envelope)
+IngestResult OrderedEventPipeline::ingest(const QByteArray &envelope, EventOrigin origin)
 {
     Q_ASSERT(QThread::currentThread() == thread());
     if (channelId_.isEmpty()) return IngestResult::Stopped;
     auto normalized = normalizeTwitchEvent(envelope, QDateTime::currentDateTimeUtc(), nextSequence_, generation_);
     if (normalized.status == NormalizationStatus::Ignored) return IngestResult::Ignored;
     if (!normalized.event) return IngestResult::Invalid;
-    if (normalized.event->header.channelId != channelId_) return IngestResult::WrongChannel;
+    normalized.event->header.origin = origin;
+    return queue(std::move(*normalized.event));
+}
+
+IngestResult OrderedEventPipeline::ingest(PluginEvent event)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (channelId_.isEmpty()) return IngestResult::Stopped;
+    event.header.channelId = channelId_;
+    event.header.sequence = nextSequence_;
+    event.header.generation = generation_;
+    return queue(std::move(event));
+}
+
+IngestResult OrderedEventPipeline::queue(PluginEvent event)
+{
+    const auto validation = validateEvent(event);
+    if (validation.disposition == ValidationDisposition::Rejected) {
+        reportValidationFailure(validation.category, "ingress");
+        return IngestResult::Invalid;
+    }
+    if (event.header.channelId != channelId_) return IngestResult::WrongChannel;
     const auto now = clock_.elapsed();
-    const auto id = normalized.event->header.eventId;
+    const auto id = event.header.eventId;
     if (seen_.contains(id) && now - seen_.value(id) < 10 * 60 * 1000) return IngestResult::Duplicate;
     while (!seenOrder_.empty() && (now - seenOrder_.front().second >= 10 * 60 * 1000 || seenOrder_.size() >= 16384)) {
         seen_.remove(seenOrder_.front().first);
@@ -75,7 +98,7 @@ IngestResult OrderedEventPipeline::ingest(const QByteArray &envelope)
     ++nextSequence_;
     // Insert the ticket before asset resolution: a cached image can finish inline.
     auto job = std::make_shared<Pending>();
-    job->event = std::move(*normalized.event);
+    job->event = std::move(event);
     pending_.push_back(job);
     if (auto *chat = chatContent(job->event.payload)) {
         const std::weak_ptr<Pending> weak = job;
@@ -95,6 +118,14 @@ IngestResult OrderedEventPipeline::ingest(const QByteArray &envelope)
     flush();
     if (!pending_.empty()) flushTimer_.start();
     return IngestResult::Accepted;
+}
+
+void OrderedEventPipeline::reportValidationFailure(const QString &category, const char *stage)
+{
+    ++validationFailures_;
+    if (log_ && (validationFailures_ <= 5 || validationFailures_ % 100 == 0))
+        log_(QStringLiteral("[Security][%1] Rejected EventSub event at %2; count=%3")
+            .arg(category, QString::fromLatin1(stage)).arg(validationFailures_));
 }
 
 void OrderedEventPipeline::enforceBudget()
@@ -123,6 +154,11 @@ void OrderedEventPipeline::flush()
         if (!job->ready && !job->deadline.hasExpired()) break;
         job->ready = true;
         pending_.pop_front();
+        const auto validation = validateEvent(job->event);
+        if (validation.disposition == ValidationDisposition::Rejected) {
+            reportValidationFailure(validation.category, "publication");
+            continue;
+        }
         const auto result = dispatcher_.publish(std::make_shared<const PluginEvent>(std::move(job->event)));
         if (result != PublishResult::Published && log_)
             log_(QStringLiteral("Event dispatcher rejected a producer publication"));

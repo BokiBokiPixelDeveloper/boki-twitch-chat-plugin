@@ -15,6 +15,8 @@ struct BackendAttachment::State {
     bool accepted = false;
     bool connect = false;
     bool configured = false;
+    bool eventTestEnabled = false;
+    std::deque<std::pair<SyntheticEventKind, SyntheticEventValues>> syntheticRequests;
 };
 BackendAttachment::BackendAttachment(std::shared_ptr<State> state) : state_(std::move(state)) {}
 BackendAttachment::~BackendAttachment() { close(); }
@@ -29,6 +31,18 @@ void BackendAttachment::configure(TwitchConfiguration configuration)
     }
 }
 void BackendAttachment::connect() { std::lock_guard lock(state_->mutex); state_->connect = true; }
+void BackendAttachment::setEventTestEnabled(bool enabled)
+{
+    std::lock_guard lock(state_->mutex);
+    state_->eventTestEnabled = enabled;
+    if (!enabled) state_->syntheticRequests.clear();
+}
+void BackendAttachment::injectSyntheticEvent(SyntheticEventKind kind, SyntheticEventValues values)
+{
+    std::lock_guard lock(state_->mutex);
+    if (state_->active && state_->eventTestEnabled)
+        state_->syntheticRequests.emplace_back(kind, std::move(values));
+}
 void BackendAttachment::close()
 {
     Consumer retired;
@@ -48,6 +62,7 @@ struct PluginRuntime::Service final : QObject {
     TwitchConfiguration current;
     QSet<QByteArray> knownTokens;
     std::unique_ptr<TwitchClient> client;
+    std::unique_ptr<SyntheticEventProducer> synthetic;
     QTimer timer;
     bool selected = false;
     bool started = false;
@@ -57,20 +72,23 @@ struct PluginRuntime::Service final : QObject {
     Service(std::shared_ptr<EventDispatcher> bus, TwitchClient::Dependencies dependencies, TwitchClient::LogCallback log)
         : dispatcher(std::move(bus))
     {
-        client = std::make_unique<TwitchClient>(*dispatcher, std::move(log), [this](TwitchTokens tokens) {
+        client = std::make_unique<TwitchClient>(*dispatcher, log, [this](TwitchTokens tokens) {
             if (!current.accessToken.isEmpty()) knownTokens.insert(hash(current.accessToken));
             current.accessToken = tokens.accessToken;
             current.refreshToken = tokens.refreshToken;
             knownTokens.insert(hash(current.accessToken));
             tokensChanged = true;
         }, std::move(dependencies));
+        synthetic = std::make_unique<SyntheticEventProducer>(*dispatcher, std::move(log));
         timer.setInterval(20);
         QObject::connect(&timer, &QTimer::timeout, this, [this] { pump(); });
         timer.start();
     }
-    ~Service() override { timer.stop(); client->stop(); client.reset(); }
+    ~Service() override { timer.stop(); synthetic.reset(); client->stop(); client.reset(); }
     bool matches(const TwitchConfiguration &config) const
     {
+        if (client->isLocalTestMode() || client->hasConnectionConfigurationError())
+            return true;
         const bool channelMatches = config.channel == current.channel ||
             (config.channel.isEmpty() && current.channel == client->authenticatedLogin()) ||
             (current.channel.isEmpty() && config.channel == client->authenticatedLogin());
@@ -102,6 +120,18 @@ struct PluginRuntime::Service final : QObject {
             knownTokens.clear();
             return;
         }
+        bool eventTestEnabled = false;
+        std::vector<std::pair<SyntheticEventKind, SyntheticEventValues>> syntheticRequests;
+        for (const auto &weak : attachments) if (auto state = weak.lock()) {
+            std::lock_guard lock(state->mutex);
+            eventTestEnabled |= state->eventTestEnabled;
+            while (!state->syntheticRequests.empty()) {
+                syntheticRequests.push_back(std::move(state->syntheticRequests.front()));
+                state->syntheticRequests.pop_front();
+            }
+        }
+        synthetic->setEnabled(eventTestEnabled);
+        for (auto &[kind, values] : syntheticRequests) (void)synthetic->inject(kind, values);
         // Selection happens before delivery so source creation order cannot start
         // a second client. A conflicting source can take over only when nobody
         // still requests the current account/channel.
@@ -113,7 +143,9 @@ struct PluginRuntime::Service final : QObject {
         std::optional<TwitchConfiguration> nextConfiguration;
         for (auto &weak : attachments) if (auto state = weak.lock()) {
             std::lock_guard lock(state->mutex);
-            if ((!selected || (!hasCompatible && (state->connect || state->configured))) && !state->configuration.clientId.isEmpty()) {
+            if ((!selected || (!hasCompatible && (state->connect || state->configured || client->isLocalTestMode() ||
+                                                   client->hasConnectionConfigurationError()))) &&
+                (!state->configuration.clientId.isEmpty() || client->isLocalTestMode() || client->hasConnectionConfigurationError())) {
                 nextConfiguration = state->configuration;
                 break;
             }

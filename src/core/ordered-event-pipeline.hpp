@@ -14,9 +14,10 @@ public:
     explicit OrderedEventPipeline(EventDispatcher &dispatcher, LogCallback log = {},
                                   QNetworkAccessManager *assets = nullptr);
     ~OrderedEventPipeline() override;
-    void setChannel(QString channelId, std::uint64_t generation);
+    void setChannel(QString channelId, std::uint64_t generation, bool loadThirdPartyEmotes = true);
     void stop();
-    IngestResult ingest(const QByteArray &envelope);
+    IngestResult ingest(const QByteArray &envelope, EventOrigin origin = EventOrigin::Production);
+    IngestResult ingest(PluginEvent event);
 
 private:
     struct Pending {
@@ -26,6 +27,8 @@ private:
     };
     void flush();
     void enforceBudget();
+    void reportValidationFailure(const QString &category, const char *stage);
+    IngestResult queue(PluginEvent event);
     EventDispatcher &dispatcher_;
     LogCallback log_;
     EmoteService emotes_;
@@ -37,4 +40,5 @@ private:
     std::deque<std::shared_ptr<Pending>> pending_;
     QHash<QString, qint64> seen_;
     std::deque<std::pair<QString, qint64>> seenOrder_;
+    std::uint64_t validationFailures_ = 0;
 };

@@ -18,7 +18,7 @@ public:
     using Callback = std::function<void(ImageAsset)>;
     explicit ImageCache(QNetworkAccessManager *transport = nullptr);
     ~ImageCache() override;
-    void request(const QUrl &url, Callback callback);
+    void request(const QUrl &url, Callback callback, std::optional<EmoteProvider> provider = {});
     void clear();
 
 private:

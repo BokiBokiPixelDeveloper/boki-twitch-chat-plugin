@@ -139,9 +139,9 @@ live wiring, file responsibilities, current build/test results and remaining
 manual OBS/Twitch checks. `docs/V1_EVENT_FOUNDATION_PLAN.md` remains the historical
 pre-implementation audit, rather than being rewritten as an implementation report.
 
-## Version 2 security boundary (not implemented)
+## Version 2 security boundary
 
-Insert the entry boundary in `OrderedEventPipeline::ingest`, immediately after
+`OrderedEventPipeline::ingest` validates each event immediately after
 `normalizeTwitchEvent` returns a successful `NormalizationResult::event`, before
 creating a pending ticket or calling `EmoteService::resolve`:
 
@@ -151,11 +151,19 @@ Provider normalization -> Security / Validation Boundary -> Safe Internal Event
                                                        enrichment / dispatch
 ```
 
-The affected interfaces are `NormalizationResult::event`, the pipeline's pending
-`PluginEvent`, `EmoteService::resolve`, and the immutable `EventPtr` construction
-in `OrderedEventPipeline::flush` before `EventDispatcher::publish`. Third-party
-catalog enrichment introduces additional external text/URLs, so V2 must apply its
-policy to those additions before image requests and recheck the completed event
-before publication. Today's immutable `EventPtr` is not a security certification.
-No security layer, HTML sanitization, browser runtime or widget interface is
-implemented by this V1 boundary note.
+`validateEvent` applies shared text, identity, user, numeric, emote, badge, range
+and URL rules. Invalid required identity or primary data rejects the event;
+malformed optional metadata is removed or replaced with a safe fallback. Text
+which resembles HTML remains semantic text and is never converted to markup.
+
+Third-party enrichment is constrained before image requests by provider-aware CDN
+validation. `OrderedEventPipeline::flush` revalidates the completed event before
+creating its immutable `EventPtr` and calling the single production dispatcher
+publication site. Consumers therefore receive only events that passed the central
+policy. Future Web output must still encode text at its sink and use safe DOM APIs;
+validation does not make strings trusted HTML.
+
+Local EventSub testing is documented in
+[LOCAL_EVENTSUB_TESTING.md](LOCAL_EVENTSUB_TESTING.md). It changes transport and
+subscription endpoints only; local notifications use the same normalizer,
+validation, enrichment and dispatcher path as production.

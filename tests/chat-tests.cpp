@@ -526,7 +526,7 @@ void ChatTests::inlineLayoutAndOverlay()
 void ChatTests::cacheDeduplicatesAndRejectsFailures()
 {
     FakeNetwork network;
-    const QUrl url(QStringLiteral("https://images.example/emote"));
+    const QUrl url(QStringLiteral("https://static-cdn.jtvnw.net/emote"));
     network.responses.insert(url.toString(), {png(), 200, 20});
     ImageCache cache(&network);
     int completed = 0;
@@ -538,7 +538,7 @@ void ChatTests::cacheDeduplicatesAndRejectsFailures()
     cache.request(url, [&](ImageAsset image) { QCOMPARE(image, first); ++completed; });
     QCOMPARE(completed, 3);
     QCOMPARE(network.requests.size(), 1);
-    const QUrl bad(QStringLiteral("https://images.example/missing"));
+    const QUrl bad(QStringLiteral("https://static-cdn.jtvnw.net/missing"));
     cache.request(bad, [&](ImageAsset image) { QVERIFY(!image); ++completed; });
     QTRY_COMPARE(completed, 4);
     cache.request(bad, [&](ImageAsset image) { QVERIFY(!image); ++completed; });
@@ -546,6 +546,8 @@ void ChatTests::cacheDeduplicatesAndRejectsFailures()
     QCOMPARE(network.requests.size(), 2);
     cache.request(QUrl(QStringLiteral("file:///etc/passwd")), [&](ImageAsset image) { QVERIFY(!image); ++completed; });
     QCOMPARE(network.requests.size(), 2);
+    cache.request(url, [&](ImageAsset image) { QVERIFY(!image); ++completed; }, EmoteProvider::SevenTV);
+    QCOMPARE(network.requests.size(), 2); // Provider mismatch fails before the cache/network path.
     for (const auto &request : network.requests) {
         QVERIFY(!request.hasRawHeader("Authorization"));
         QVERIFY(!request.hasRawHeader("Client-Id"));
@@ -555,13 +557,13 @@ void ChatTests::cacheDeduplicatesAndRejectsFailures()
 void ChatTests::orderedMessagesAndStaticFallback()
 {
     FakeNetwork network;
-    network.responses.insert(QStringLiteral("https://images.example/slow"), {png(), 200, 80});
-    network.responses.insert(QStringLiteral("https://images.example/static"), {png(), 200, 0});
+    network.responses.insert(QStringLiteral("https://static-cdn.jtvnw.net/slow"), {png(), 200, 80});
+    network.responses.insert(QStringLiteral("https://static-cdn.jtvnw.net/static"), {png(), 200, 0});
     std::vector<ChatMessage> delivered;
     EmoteService service([&](ChatMessage message) { delivered.push_back(std::move(message)); }, &network);
-    service.resolve(imageMessage(QStringLiteral("first"), QStringLiteral("https://images.example/slow")));
-    auto second = imageMessage(QStringLiteral("second"), QStringLiteral("https://images.example/missing"));
-    second.fragments[0].fallbackUrl = QUrl(QStringLiteral("https://images.example/static"));
+    service.resolve(imageMessage(QStringLiteral("first"), QStringLiteral("https://static-cdn.jtvnw.net/slow")));
+    auto second = imageMessage(QStringLiteral("second"), QStringLiteral("https://static-cdn.jtvnw.net/missing"));
+    second.fragments[0].fallbackUrl = QUrl(QStringLiteral("https://static-cdn.jtvnw.net/static"));
     service.resolve(std::move(second));
     service.resolve({QStringLiteral("third"), QStringLiteral("plain")});
     QTRY_COMPARE(delivered.size(), size_t(3));
@@ -575,13 +577,13 @@ void ChatTests::orderedMessagesAndStaticFallback()
 void ChatTests::timeoutAndDestruction()
 {
     FakeNetwork network;
-    network.responses.insert(QStringLiteral("https://images.example/stall"), {png(), 200, 10000});
+    network.responses.insert(QStringLiteral("https://static-cdn.jtvnw.net/stall"), {png(), 200, 10000});
     int delivered = 0;
     {
         EmoteService service([&](ChatMessage message) { QVERIFY(!message.fragments[0].image); ++delivered; }, &network);
-        service.resolve(imageMessage(QStringLiteral("first"), QStringLiteral("https://images.example/stall")));
+        service.resolve(imageMessage(QStringLiteral("first"), QStringLiteral("https://static-cdn.jtvnw.net/stall")));
         QTRY_COMPARE_WITH_TIMEOUT(delivered, 1, 3500);
-        service.resolve(imageMessage(QStringLiteral("second"), QStringLiteral("https://images.example/stall")));
+        service.resolve(imageMessage(QStringLiteral("second"), QStringLiteral("https://static-cdn.jtvnw.net/stall")));
         service.clear();
     }
     const auto replies = network.findChildren<QNetworkReply *>();

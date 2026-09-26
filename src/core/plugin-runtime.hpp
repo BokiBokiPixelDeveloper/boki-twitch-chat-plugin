@@ -1,6 +1,7 @@
 #pragma once
 
 #include "twitch/twitch-client.hpp"
+#include "core/synthetic-event-producer.hpp"
 #include <mutex>
 #include <condition_variable>
 
@@ -19,6 +20,8 @@ public:
     void configure(TwitchConfiguration configuration);
     void connect();
     void close();
+    void setEventTestEnabled(bool enabled);
+    void injectSyntheticEvent(SyntheticEventKind kind, SyntheticEventValues values = {});
     QString status() const;
 private:
     friend class PluginRuntime;
