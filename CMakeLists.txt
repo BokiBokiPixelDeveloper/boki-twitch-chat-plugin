@@ -35,6 +35,15 @@ else()
     set(CHAT_WEBP_TARGET PkgConfig::WEBP)
 endif()
 
+find_package(Threads REQUIRED)
+add_library(event-core STATIC src/core/event-types.cpp src/core/event-dispatcher.cpp)
+target_include_directories(event-core PUBLIC src)
+target_link_libraries(event-core PUBLIC Qt6::Core Qt6::Gui Threads::Threads)
+target_compile_definitions(event-core PUBLIC QT_NO_KEYWORDS)
+
+add_library(twitch-support STATIC src/twitch/chat-message-parser.cpp src/twitch/event-normalizer.cpp)
+target_link_libraries(twitch-support PUBLIC event-core)
+
 add_library(chat-support STATIC
     src/chat/emote-catalog.cpp
     src/chat/emote-service.cpp
@@ -45,6 +54,18 @@ set_target_properties(chat-support PROPERTIES AUTOMOC ON)
 target_include_directories(chat-support PUBLIC src)
 target_link_libraries(chat-support PUBLIC Qt6::Core Qt6::Gui Qt6::Network ${CHAT_WEBP_TARGET})
 target_compile_definitions(chat-support PUBLIC QT_NO_KEYWORDS)
+
+add_library(twitch-backend STATIC
+    src/core/ordered-event-pipeline.cpp
+    src/core/plugin-runtime.cpp
+    src/twitch/eventsub-socket.cpp
+    src/twitch/twitch-client.cpp
+)
+set_target_properties(twitch-backend PROPERTIES AUTOMOC ON)
+target_link_libraries(twitch-backend PUBLIC twitch-support chat-support Qt6::WebSockets)
+
+add_library(native-event-adapter STATIC src/renderer/native-event-adapter.cpp)
+target_link_libraries(native-event-adapter PUBLIC twitch-backend)
 
 if(WIN32)
     set(UPDATER_PLATFORM src/updater/post-exit-windows.cpp)
@@ -67,7 +88,6 @@ add_library(${PROJECT_NAME} MODULE)
 target_sources(${PROJECT_NAME} PRIVATE
     src/plugin-main.cpp
     src/renderer/chat-source.cpp
-    src/twitch/twitch-client.cpp
     src/updater/update-checker.cpp
     ${CHAT_EMOJI_RESOURCE}
 )
@@ -75,7 +95,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 target_include_directories(${PROJECT_NAME} PRIVATE src)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    chat-support
+    native-event-adapter
     post-exit-support
     OBS::libobs
     Qt6::Core

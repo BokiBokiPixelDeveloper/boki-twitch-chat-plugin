@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QNetworkAccessManager>
 #include <QObject>
+#include <QSet>
 #include <deque>
 #include <functional>
 
@@ -18,6 +19,7 @@ public:
     explicit ImageCache(QNetworkAccessManager *transport = nullptr);
     ~ImageCache() override;
     void request(const QUrl &url, Callback callback);
+    void clear();
 
 private:
     void pump();
@@ -29,4 +31,5 @@ private:
     QHash<QString, std::vector<Callback>> waiting_;
     std::deque<QUrl> queued_;
     int active_ = 0;
+    QSet<QNetworkReply *> replies_;
 };

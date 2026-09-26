@@ -1,75 +1,83 @@
 #pragma once
 
-#include "chat/chat-types.hpp"
-#include "chat/emote-service.hpp"
-
+#include "core/ordered-event-pipeline.hpp"
+#include "twitch/eventsub-socket.hpp"
 #include <QJsonObject>
-#include <QNetworkAccessManager>
 #include <QNetworkReply>
-#include <QTimer>
-#include <QUrl>
-#include <QWebSocket>
+#include <QSet>
 
-#include <functional>
-#include <memory>
+struct TwitchConfiguration {
+    QString clientId;
+    QString channel;
+    QString accessToken;
+    QString refreshToken;
+    bool operator==(const TwitchConfiguration &) const = default;
+};
+struct TwitchTokens { QString accessToken; QString refreshToken; };
+enum class TwitchSubscriptionState { Pending, Enabled, Failed, Revoked, Unavailable };
 
-class TwitchClient {
+class TwitchClient final : public QObject {
 public:
-    using MessageCallback = std::function<void(ChatMessage)>;
-    using GifCallback = std::function<void(DecodedGif)>;
-    using StatusCallback = std::function<void(QString)>;
-    using TokenCallback = std::function<void(QString accessToken, QString refreshToken)>;
-
-    TwitchClient(MessageCallback onMessage, GifCallback onGif, StatusCallback onStatus, TokenCallback onTokens);
-    ~TwitchClient();
-
-    void configure(QString clientId, QString channel, QString accessToken, QString refreshToken);
+    using LogCallback = std::function<void(QString)>;
+    using TokenCallback = std::function<void(TwitchTokens)>;
+    struct Dependencies {
+        QNetworkAccessManager *network = nullptr;
+        std::function<std::unique_ptr<EventSubSocket>()> socketFactory;
+        std::function<void(QUrl)> openBrowser;
+    };
+    TwitchClient(EventDispatcher &dispatcher, LogCallback log, TokenCallback tokens, Dependencies dependencies);
+    ~TwitchClient() override;
+    void configure(TwitchConfiguration configuration);
     void startOrResume();
     void beginDeviceFlow();
-    void disconnect();
-
+    void stop();
     [[nodiscard]] QString status() const { return statusText_; }
     [[nodiscard]] QString authenticatedLogin() const { return userLogin_; }
-
+    [[nodiscard]] QString broadcasterId() const { return broadcasterId_; }
+    [[nodiscard]] const QHash<QString, TwitchSubscriptionState> &subscriptions() const { return subscriptions_; }
 private:
-    static constexpr const char *kScope = "user:read:chat";
-
-    void setStatus(const QString &status);
+    using ReplyCallback = std::function<void(int, QJsonObject)>;
+    void setStatus(QString status, bool logStatus = true);
+    void failAuthentication(QString status);
+    void finish(QNetworkReply *reply, ReplyCallback callback);
     void validateToken();
     void refreshAccessToken();
-    void finishAuthFromTokenResponse(const QJsonObject &json);
-
+    void finishAuth(const QJsonObject &json);
     void pollDeviceToken();
     void resolveBroadcaster();
-    void connectEventSub(const QUrl &url = QUrl(QStringLiteral("wss://eventsub.wss.twitch.tv/ws")));
-    void handleEventSubMessage(const QString &payload);
-    void subscribeChat(const QString &sessionId);
-    void downloadGif(const QUrl &url);
-
+    void connectEventSub(const QUrl &url = QUrl(QStringLiteral("wss://eventsub.wss.twitch.tv/ws")), bool handoff = false);
+    void handleEventSubMessage(EventSubSocket *sender, const QString &payload);
+    void subscribeEvents();
+    void subscribeOne(QString type, QString version, QJsonObject condition, int attempt = 0);
+    void scheduleReconnect();
+    void closeSockets();
+    void updateConnectionStatus();
     QNetworkRequest apiRequest(const QUrl &url) const;
-    static QByteArray encodeForm(const QList<QPair<QString, QString>> &pairs);
+    QNetworkReply *postForm(const QUrl &url, const QList<QPair<QString, QString>> &fields);
 
     QNetworkAccessManager network_;
-    QWebSocket socket_;
-    QTimer devicePollTimer_;
-
-    MessageCallback onMessage_;
-    GifCallback onGif_;
-    StatusCallback onStatus_;
-    TokenCallback onTokens_;
-
-    QString clientId_;
-    QString channelLogin_;
-    QString accessToken_;
-    QString refreshToken_;
-    QString userId_;
-    QString userLogin_;
-    QString broadcasterId_;
-    QString deviceCode_;
-    QString deviceScopes_;
-    int devicePollIntervalMs_ = 5000;
-
-    EmoteService emotes_;
-
+    QNetworkAccessManager *transport_;
+    Dependencies dependencies_;
+    LogCallback log_;
+    TokenCallback tokens_;
+    OrderedEventPipeline pipeline_;
+    std::unique_ptr<EventSubSocket> socket_, replacement_;
+    QTimer devicePollTimer_, reconnectTimer_, watchdog_, validationTimer_, handoffTimer_;
+    QSet<QNetworkReply *> replies_;
+    TwitchConfiguration configuration_;
+    QSet<QString> scopes_;
+    QHash<QString, TwitchSubscriptionState> subscriptions_;
+    QString userId_, userLogin_, broadcasterId_, deviceCode_, sessionId_;
     QString statusText_{QStringLiteral("Disconnected")};
+    std::uint64_t generation_ = 0;
+    std::uint64_t sessionGeneration_ = 0;
+    bool running_ = false;
+    bool authenticating_ = false;
+    bool deviceRequestPending_ = false;
+    bool refreshing_ = false;
+    bool refreshAttempted_ = false;
+    QDeadlineTimer deviceDeadline_;
+    int pollIntervalMs_ = 5000;
+    int retryMs_ = 1000;
+    int keepaliveMs_ = 11000;
 };

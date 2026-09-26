@@ -1,3 +1,4 @@
+#include "twitch/chat-message-parser.hpp"
 #include "chat-tests.hpp"
 #include "chat/emote-service.hpp"
 #include "renderer/message-layout.hpp"
@@ -165,7 +166,7 @@ void ChatTests::twitchFragments()
       {"type":"mention","text":" @friend"}]}})").object();
     const auto message = parseTwitchMessage(event);
     QCOMPARE(message.fragments.size(), size_t(5));
-    QCOMPARE(message.userColor, QColor(QStringLiteral("#123456")));
+    QCOMPARE(message.user.color, QColor(QStringLiteral("#123456")));
     QCOMPARE(message.fragments[0].text, QStringLiteral("Hi 👀 "));
     QCOMPARE(message.fragments[1].imageUrl.path(), QStringLiteral("/emoticons/v2/25/static/dark/3.0"));
     QVERIFY(message.fragments[3].imageUrl.path().contains(QStringLiteral("/animated/")));
@@ -189,12 +190,14 @@ void ChatTests::providerCatalogs()
       "channelEmotes":[{"id":"123","code":"Dance","animated":true,"modifier":true}],
       "sharedEmotes":[{"id":"456","code":"Shared"}]})"));
     QCOMPARE(bttv.size(), 2);
+    QCOMPARE(bttv.value(QStringLiteral("Dance")).provider, std::optional{EmoteProvider::BetterTTV});
     QVERIFY(bttv.value(QStringLiteral("Dance")).zeroWidth);
     QCOMPARE(bttv.value(QStringLiteral("Shared")).imageUrl.toString(), QStringLiteral("https://cdn.betterttv.net/emote/456/3x"));
     auto ffz = parseEmoteCatalog(EmoteProvider::FrankerFaceZ, QJsonDocument::fromJson(R"({
       "default_sets":[3],"sets":{"3":{"emoticons":[{"id":42,"name":"Hello","urls":{"1":"//cdn.frankerfacez.com/1","4":"//cdn.frankerfacez.com/4"},"animated":{"4":"//cdn.frankerfacez.com/animated"}}]},
       "9":{"emoticons":[{"id":9,"name":"NotGlobal","urls":{"1":"//cdn.frankerfacez.com/9"}}]}}})"));
     QCOMPARE(ffz.size(), 1);
+    QCOMPARE(ffz.value(QStringLiteral("Hello")).provider, std::optional{EmoteProvider::FrankerFaceZ});
     QCOMPARE(ffz.value(QStringLiteral("Hello")).imageUrl.toString(), QStringLiteral("https://cdn.frankerfacez.com/animated"));
     QCOMPARE(ffz.value(QStringLiteral("Hello")).fallbackUrl.toString(), QStringLiteral("https://cdn.frankerfacez.com/4"));
     auto seven = parseEmoteCatalog(EmoteProvider::SevenTV, QJsonDocument::fromJson(R"({"emote_set":{"emotes":[
@@ -203,6 +206,7 @@ void ChatTests::providerCatalogs()
       {"name":"1x.webp","format":"WEBP","height":32},
       {"name":"3x.webp","static_name":"3x_static.webp","format":"WEBP","height":96}]}}}]}})"));
     QCOMPARE(seven.size(), 1);
+    QCOMPARE(seven.value(QStringLiteral("Alias")).provider, std::optional{EmoteProvider::SevenTV});
     QVERIFY(seven.value(QStringLiteral("Alias")).zeroWidth);
     QCOMPARE(seven.value(QStringLiteral("Alias")).imageUrl.fileName(), QStringLiteral("3x.webp"));
     QCOMPARE(seven.value(QStringLiteral("Alias")).fallbackUrl.fileName(), QStringLiteral("3x_static.webp"));
@@ -231,6 +235,73 @@ void ChatTests::wholeTokensAndPrecedence()
     next.fragments.clear();
     catalog.apply(next);
     QCOMPARE(next.fragments[0].type, ChatFragment::Type::Text);
+}
+
+void ChatTests::structuredProviderIdentityAndRanges()
+{
+    EmoteCatalog catalog;
+    const QString token = QStringLiteral("Dance");
+    catalog.replace(EmoteProvider::FrankerFaceZ, false, {{token, emote(token, QStringLiteral("https://ffz.example/emote"))}});
+    // Twitch must never index or overwrite a third-party catalog bucket.
+    catalog.replace(EmoteProvider::Twitch, true, {{token, emote(token, QStringLiteral("https://twitch.example/emote"))}});
+    QVERIFY(parseEmoteCatalog(EmoteProvider::Twitch, QJsonDocument::fromJson(R"({"emotes":[]})")).isEmpty());
+    ChatMessage message{QStringLiteral("User"), QStringLiteral("👀 é Dance Dance")};
+    catalog.apply(message);
+    QString reconstructed;
+    int emotes = 0;
+    for (const auto &fragment : message.fragments) {
+        QVERIFY(fragment.sourceRange);
+        QCOMPARE(fragment.sourceRange->offset, reconstructed.size());
+        QCOMPARE(fragment.sourceRange->length, fragment.text.size());
+        QCOMPARE(message.text.mid(fragment.sourceRange->offset, fragment.sourceRange->length), fragment.text);
+        reconstructed += fragment.text;
+        if (fragment.type == ChatFragment::Type::Emote) {
+            ++emotes;
+            QCOMPARE(fragment.provider, std::optional{EmoteProvider::FrankerFaceZ});
+        }
+    }
+    QCOMPARE(emotes, 2);
+    QCOMPARE(reconstructed, message.text);
+    QCOMPARE(message.fragments[1].sourceRange->offset, qsizetype(6));
+    QCOMPARE(message.fragments[3].sourceRange->offset, qsizetype(12));
+}
+
+void ChatTests::mentionsAndCheermotesKeepTheirMetadata()
+{
+    const auto input = QJsonDocument::fromJson(R"({"message":{"text":"@friend Cheer10 Dance","fragments":[
+        {"type":"mention","text":"@friend","mention":{"user_id":"friend","user_login":"friend","user_name":"Friend"}},
+        {"type":"text","text":" "},
+        {"type":"cheermote","text":"Cheer10","cheermote":{"prefix":"cheer","bits":10,"tier":1}},
+        {"type":"text","text":" Dance"}]}})").object();
+    auto message = parseTwitchMessage(input);
+    EmoteCatalog catalog;
+    QHash<QString, ChatFragment> entries;
+    for (const auto *name : {"@friend", "Cheer10", "Dance"})
+        entries.insert(QString::fromLatin1(name), emote(QString::fromLatin1(name), QStringLiteral("https://images.example/emote")));
+    catalog.replace(EmoteProvider::SevenTV, true, std::move(entries));
+    catalog.apply(message);
+    QCOMPARE(message.fragments.size(), size_t(5));
+    QVERIFY(message.fragments[0].mention);
+    QCOMPARE(message.fragments[0].mention->id, QStringLiteral("friend"));
+    QVERIFY(message.fragments[2].cheermote);
+    QCOMPARE(message.fragments[2].cheermote->bits, 10);
+    QVERIFY(!message.fragments[0].provider);
+    QVERIFY(!message.fragments[2].provider);
+    QCOMPARE(message.fragments[4].provider, std::optional{EmoteProvider::SevenTV});
+    QCOMPARE(message.fragments[4].sourceRange->offset, qsizetype(16));
+}
+
+void ChatTests::legacyMediaAndMalformedRanges()
+{
+    const auto input = QJsonDocument::fromJson(R"({"message":{"text":"<literal> 👀","fragments":[
+        {"type":"gif","text":"wrong","gif":{"url":"https://images.example/legacy.gif"}}]}})").object();
+    const auto message = parseTwitchMessage(input);
+    QCOMPARE(message.media.size(), size_t(1));
+    QCOMPARE(message.media[0].imageUrl.fileName(), QStringLiteral("legacy.gif"));
+    QCOMPARE(message.fragments.size(), size_t(1));
+    QCOMPARE(message.fragments[0].text, message.text);
+    QCOMPARE(message.fragments[0].sourceRange->offset, qsizetype(0));
+    QCOMPARE(message.fragments[0].sourceRange->length, message.text.size());
 }
 
 void ChatTests::imageDecoding()
@@ -494,9 +565,9 @@ void ChatTests::orderedMessagesAndStaticFallback()
     service.resolve(std::move(second));
     service.resolve({QStringLiteral("third"), QStringLiteral("plain")});
     QTRY_COMPARE(delivered.size(), size_t(3));
-    QCOMPARE(delivered[0].userName, QStringLiteral("first"));
-    QCOMPARE(delivered[1].userName, QStringLiteral("second"));
-    QCOMPARE(delivered[2].userName, QStringLiteral("third"));
+    QCOMPARE(delivered[0].user.displayName, QStringLiteral("first"));
+    QCOMPARE(delivered[1].user.displayName, QStringLiteral("second"));
+    QCOMPARE(delivered[2].user.displayName, QStringLiteral("third"));
     QVERIFY(delivered[0].fragments[0].image);
     QVERIFY(delivered[1].fragments[0].image);
 }

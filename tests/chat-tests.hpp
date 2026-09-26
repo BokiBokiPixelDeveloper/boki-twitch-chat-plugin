@@ -10,6 +10,9 @@ private Q_SLOTS:
     void malformedFragmentsKeepText();
     void providerCatalogs();
     void wholeTokensAndPrecedence();
+    void structuredProviderIdentityAndRanges();
+    void mentionsAndCheermotesKeepTheirMetadata();
+    void legacyMediaAndMalformedRanges();
     void imageDecoding();
     void longAnimationFitsMemoryBudget();
     void animationUsesPerFrameDelays();

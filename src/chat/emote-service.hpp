@@ -13,11 +13,13 @@ public:
     void setChannel(const QString &twitchId);
     void clear();
     void resolve(ChatMessage message);
+    void resolve(ChatMessage message, MessageCallback completion);
     void loadImage(const QUrl &url, ImageCache::Callback callback);
 
 private:
     struct Pending {
         ChatMessage message;
+        MessageCallback completion;
         QDeadlineTimer deadline{2500};
         int remaining = 0;
         bool started = false;
@@ -41,4 +43,5 @@ private:
     int loading_ = 0;
     bool initialLoad_ = false;
     std::deque<std::shared_ptr<Pending>> pending_;
+    QSet<QNetworkReply *> replies_;
 };

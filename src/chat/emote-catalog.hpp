@@ -5,9 +5,6 @@
 #include <QJsonDocument>
 #include <array>
 
-enum class EmoteProvider { FrankerFaceZ, BetterTTV, SevenTV };
-
-ChatMessage parseTwitchMessage(const QJsonObject &event);
 QHash<QString, ChatFragment> parseEmoteCatalog(EmoteProvider provider, const QJsonDocument &document);
 
 class EmoteCatalog {

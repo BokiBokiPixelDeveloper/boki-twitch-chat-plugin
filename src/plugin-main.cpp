@@ -12,6 +12,8 @@ MODULE_EXPORT const char *obs_module_description(void)
     return "Native Twitch chat renderer (no CEF/browser source)";
 }
 
+static std::shared_ptr<PluginRuntime> runtime;
+
 static const char *sourceName(void *)
 {
     return "Bokis Twitch Chat Plugin";
@@ -19,7 +21,7 @@ static const char *sourceName(void *)
 
 static void *sourceCreate(obs_data_t *settings, obs_source_t *source)
 {
-    return new ChatSource(settings, source);
+    return new ChatSource(settings, source, runtime);
 }
 
 static void sourceDestroy(void *data)
@@ -54,7 +56,7 @@ static void sourceRender(void *data, gs_effect_t *)
 
 static obs_properties_t *sourceProperties(void *data)
 {
-    return static_cast<ChatSource *>(data)->properties();
+    return data ? static_cast<ChatSource *>(data)->properties() : obs_properties_create();
 }
 
 static void sourceDefaults(obs_data_t *settings)
@@ -84,6 +86,9 @@ static int emojiFontId = -1;
 bool obs_module_load(void)
 {
     postexit::holdProcessUseLock();
+    runtime = std::make_shared<PluginRuntime>(TwitchClient::Dependencies{}, [](QString message) {
+        blog(LOG_INFO, "[bokis-twitch-chat-plugin] %s", message.toUtf8().constData());
+    });
     emojiFontId = QFontDatabase::addApplicationFont(QStringLiteral(":/bokis-twitch-chat-plugin/fonts/NotoColorEmoji.ttf"));
     if (emojiFontId < 0)
         blog(LOG_WARNING, "[bokis-twitch-chat-plugin] Could not load bundled emoji font");
@@ -107,6 +112,8 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
+    if (runtime) runtime->shutdown();
+    runtime.reset();
     if (emojiFontId >= 0)
         QFontDatabase::removeApplicationFont(emojiFontId);
     emojiFontId = -1;

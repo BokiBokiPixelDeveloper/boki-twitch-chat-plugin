@@ -1,7 +1,8 @@
 #pragma once
 
 #include "renderer/render-types.hpp"
-#include "twitch/twitch-client.hpp"
+#include "renderer/native-event-adapter.hpp"
+#include <mutex>
 #include "updater/update-checker.hpp"
 
 #include <QMutex>
@@ -17,14 +18,14 @@
 
 class ChatSource {
 public:
-    ChatSource(obs_data_t *settings, obs_source_t *source);
+    ChatSource(obs_data_t *settings, obs_source_t *source, std::shared_ptr<PluginRuntime> runtime);
     ~ChatSource();
 
     void update(obs_data_t *settings);
     void tick(float seconds);
     void render();
-    uint32_t width() const { return canvasWidth_; }
-    uint32_t height() const { return canvasHeight_; }
+    uint32_t width() const { std::lock_guard lock(sourceMutex_); return canvasWidth_; }
+    uint32_t height() const { std::lock_guard lock(sourceMutex_); return canvasHeight_; }
 
     obs_properties_t *properties();
     void connectTwitch();
@@ -38,7 +39,6 @@ public:
 private:
     void enqueueMessage(ChatMessage message);
     void enqueueGif(DecodedGif gif);
-    void persistTokens(const QString &accessToken, const QString &refreshToken);
 
     void consumePending();
     float chooseY(float messageHeight, float messageWidth, float speed);
@@ -49,12 +49,12 @@ private:
     static void updateTexture(void *texture, const QImage &image);
 
     obs_source_t *source_ = nullptr;
-    std::unique_ptr<TwitchClient> twitch_;
+    mutable std::recursive_mutex sourceMutex_;
+    std::shared_ptr<PluginRuntime> runtime_;
+    std::shared_ptr<BackendAttachment> backend_;
+    std::shared_ptr<NativeEventAdapter> adapter_ = std::make_shared<NativeEventAdapter>();
     std::unique_ptr<UpdateChecker> updater_;
 
-    mutable QMutex pendingMutex_;
-    std::deque<PreparedMessage> pendingMessages_;
-    std::deque<DecodedGif> pendingGifs_;
 
     std::vector<RenderMessage> messages_;
     std::vector<RenderGif> gifs_;
@@ -77,13 +77,11 @@ private:
     float gifSpeed_ = 170.0f;
     float gifLifetimeSeconds_ = 12.0f;
 
-    std::atomic<int> activeMessageCount_{0};
 
     QString clientId_;
     QString channel_;
     QString accessToken_;
     QString refreshToken_;
-    QString status_{QStringLiteral("Disconnected")};
 
     mutable std::mt19937 rng_{std::random_device{}()};
 };
