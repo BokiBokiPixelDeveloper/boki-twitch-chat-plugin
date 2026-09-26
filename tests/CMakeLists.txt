@@ -20,6 +20,12 @@ foreach(suite event-dispatcher event-normalizer)
     set_tests_properties(${suite}-tests PROPERTIES TIMEOUT 30)
 endforeach()
 
+add_executable(synthetic-event-tests synthetic-event-tests.cpp)
+set_target_properties(synthetic-event-tests PROPERTIES AUTOMOC ON)
+target_link_libraries(synthetic-event-tests PRIVATE twitch-backend Qt6::Test)
+add_test(NAME synthetic-event-tests COMMAND synthetic-event-tests)
+set_tests_properties(synthetic-event-tests PROPERTIES TIMEOUT 30)
+
 add_executable(updater-tests updater-tests.cpp ../src/updater/update-checker.cpp)
 set_target_properties(updater-tests PROPERTIES AUTOMOC ON)
 target_include_directories(updater-tests PRIVATE ../src $<TARGET_PROPERTY:OBS::libobs,INTERFACE_INCLUDE_DIRECTORIES>)

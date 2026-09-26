@@ -16,7 +16,10 @@ ChatMessage parseTwitchMessage(const QJsonObject &event)
     out.messageId = event.value(QStringLiteral("message_id")).toString();
     if (!event.value(QStringLiteral("chatter_is_anonymous")).toBool())
         out.user = parseTwitchUser(event, QStringLiteral("chatter_"));
-    out.user.color = QColor(event.value(QStringLiteral("color")).toString());
+    const auto rawColor = event.value(QStringLiteral("color")).toString();
+    static const QRegularExpression twitchColor(QStringLiteral("^#[0-9A-Fa-f]{6}$"));
+    if (twitchColor.match(rawColor).hasMatch())
+        out.user.color = QColor(rawColor);
     out.metadata.messageType = event.value(QStringLiteral("message_type")).toString();
     out.metadata.systemText = event.value(QStringLiteral("system_message")).toString();
     out.metadata.rewardId = event.value(QStringLiteral("channel_points_custom_reward_id")).toString();
@@ -72,9 +75,9 @@ ChatMessage parseTwitchMessage(const QJsonObject &event)
                 cheerPart.value(QStringLiteral("bits")).toInt(), cheerPart.value(QStringLiteral("tier")).toInt()};
         } else if (type == QStringLiteral("gif")) {
             // Preserve the legacy extension as media, not a new Twitch event type.
-            const QUrl url(part.value(QStringLiteral("gif")).toObject().value(QStringLiteral("url")).toString());
-            if (!url.isEmpty() && url.isValid())
-                out.media.push_back({url, {}});
+            const auto rawUrl = part.value(QStringLiteral("gif")).toObject().value(QStringLiteral("url")).toString();
+            const QUrl url(rawUrl, QUrl::StrictMode);
+            if (!rawUrl.isEmpty() && url.isValid()) out.media.push_back({url, {}});
         }
         fragmentText += fragment.text;
         out.fragments.push_back(std::move(fragment));

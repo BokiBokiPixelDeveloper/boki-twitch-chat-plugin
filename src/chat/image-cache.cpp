@@ -1,4 +1,5 @@
 #include "chat/image-cache.hpp"
+#include "core/event-validation.hpp"
 
 #include <QBuffer>
 #include <QDateTime>
@@ -154,16 +155,19 @@ void ImageCache::clear()
     active_ = 0;
 }
 
-void ImageCache::request(const QUrl &url, Callback callback)
+void ImageCache::request(const QUrl &url, Callback callback, std::optional<EmoteProvider> provider)
 {
+    if (!isAllowedAssetUrl(url, provider)) {
+        callback({});
+        return;
+    }
     const QString key = url.toString();
     if (auto *cached = cache_.object(key)) {
         callback(*cached);
         return;
     }
     const auto *failedUntil = failures_.object(key);
-    if (!url.isValid() || url.scheme() != QStringLiteral("https") || url.host().isEmpty() ||
-        (failedUntil && *failedUntil > QDateTime::currentMSecsSinceEpoch())) {
+    if (failedUntil && *failedUntil > QDateTime::currentMSecsSinceEpoch()) {
         callback({});
         return;
     }
@@ -192,7 +196,9 @@ void ImageCache::pump()
         ++active_;
         QNetworkRequest request(url);
         request.setTransferTimeout(5000);
-        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        // A redirect could cross the provider allowlist after the original URL
+        // was validated. Provider CDN URLs are fetched without redirects.
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
         auto *reply = transport_->get(request); // never attach Twitch credentials to image requests
         reply->setParent(this); // Cancel deferred reply/timer work with this owner.
         replies_.insert(reply);

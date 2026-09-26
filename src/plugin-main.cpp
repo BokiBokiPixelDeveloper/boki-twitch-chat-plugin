@@ -78,6 +78,13 @@ static void sourceDefaults(obs_data_t *settings)
     obs_data_set_default_double(settings, "gif_speed", 170.0);
     obs_data_set_default_double(settings, "gif_lifetime", 12.0);
     obs_data_set_default_bool(settings, "auto_update_check", true);
+    obs_data_set_default_bool(settings, "event_test_enabled", false);
+    obs_data_set_default_string(settings, "event_test_display_name", "Test User");
+    obs_data_set_default_string(settings, "event_test_chat_text", "This is a test message.");
+    obs_data_set_default_int(settings, "event_test_cheer_bits", 100);
+    obs_data_set_default_int(settings, "event_test_raid_viewers", 25);
+    obs_data_set_default_int(settings, "event_test_gift_count", 5);
+    obs_data_set_default_int(settings, "event_test_resub_months", 6);
 }
 
 static obs_source_info sourceInfo = {};
@@ -86,7 +93,9 @@ static int emojiFontId = -1;
 bool obs_module_load(void)
 {
     postexit::holdProcessUseLock();
-    runtime = std::make_shared<PluginRuntime>(TwitchClient::Dependencies{}, [](QString message) {
+    TwitchClient::Dependencies dependencies;
+    dependencies.connectionSettings = readEventSubConnectionSettings();
+    runtime = std::make_shared<PluginRuntime>(std::move(dependencies), [](QString message) {
         blog(LOG_INFO, "[bokis-twitch-chat-plugin] %s", message.toUtf8().constData());
     });
     emojiFontId = QFontDatabase::addApplicationFont(QStringLiteral(":/bokis-twitch-chat-plugin/fonts/NotoColorEmoji.ttf"));

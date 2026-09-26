@@ -1,5 +1,6 @@
 #include "twitch/event-normalizer.hpp"
 #include "core/event-dispatcher.hpp"
+#include "core/event-validation.hpp"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -287,6 +288,94 @@ private Q_SLOTS:
         payload.insert("subscription", QJsonObject{{"type", "channel.cheer"}, {"version", "1"}});
         root.insert("payload", payload);
         QCOMPARE(normalize(root).status, NormalizationStatus::Invalid);
+    }
+
+    void securityBoundaryPreservesSemanticTextAndDropsOptionalAssets()
+    {
+        auto result = normalize("channel.chat.message", chat());
+        QVERIFY(result.event);
+        auto event = *result.event;
+        auto &message = std::get<ChatMessage>(event.payload);
+        message.text = QStringLiteral("<script>alert(1)</script> <img src=x onerror=alert(1)> 😀\r\nnext");
+        message.fragments = {{ChatFragment::Type::Text, message.text}};
+        message.fragments.front().sourceRange = TextRange{0, message.text.size()};
+        message.media = {{QUrl(QStringLiteral("javascript:alert(1)")), {}},
+                         {QUrl(QStringLiteral("https://static-cdn.jtvnw.net/emote.png")), {}}};
+        message.badges = {{BadgeProvider::Twitch, QStringLiteral("subscriber"), QStringLiteral("1"), {},
+                           QUrl(QStringLiteral("file:///tmp/badge.png"))}};
+        const auto validation = validateEvent(event);
+        QCOMPARE(validation.disposition, ValidationDisposition::Repaired);
+        const auto &validated = std::get<ChatMessage>(event.payload);
+        QCOMPARE(validated.text, QStringLiteral("<script>alert(1)</script> <img src=x onerror=alert(1)> 😀\nnext"));
+        QCOMPARE(validated.media.size(), size_t(1));
+        QVERIFY(validated.badges.front().imageUrl.isEmpty());
+    }
+
+    void securityBoundaryRejectsRequiredIdsAndInvalidRanges()
+    {
+        auto result = normalize("channel.chat.message", chat());
+        QVERIFY(result.event);
+        auto event = *result.event;
+        event.header.eventId = QStringLiteral("bad id");
+        QCOMPARE(validateEvent(event).disposition, ValidationDisposition::Rejected);
+
+        event = *result.event;
+        auto &message = std::get<ChatMessage>(event.payload);
+        message.fragments = {{ChatFragment::Type::Emote, QStringLiteral("Hello")}};
+        message.fragments.front().provider = EmoteProvider::Twitch;
+        message.fragments.front().emoteId = QStringLiteral("25");
+        message.fragments.front().imageUrl = QUrl(QStringLiteral("data:image/svg+xml,x"));
+        QCOMPARE(validateEvent(event).disposition, ValidationDisposition::Repaired);
+        QCOMPARE(std::get<ChatMessage>(event.payload).fragments.front().type, ChatFragment::Type::Text);
+    }
+
+    void securityBoundaryAcceptsOnlyApprovedHttpsAssetsAndBoundsText()
+    {
+        QVERIFY(isAllowedAssetUrl(QUrl(QStringLiteral("https://static-cdn.jtvnw.net/emote.png")), EmoteProvider::Twitch));
+        QVERIFY(isAllowedAssetUrl(QUrl(QStringLiteral("HTTPS://cdn.7tv.app/emote.png")), EmoteProvider::SevenTV));
+        for (const auto &url : {QStringLiteral("http://static-cdn.jtvnw.net/a"),
+                                QStringLiteral("javascript:alert(1)"), QStringLiteral("file:///tmp/a"),
+                                QStringLiteral("data:image/png,x"), QStringLiteral("ws://127.0.0.1:8080/ws"),
+                                QStringLiteral("wss://eventsub.wss.twitch.tv/ws"), QStringLiteral("https://static-cdn.jtvnw.net/%00"),
+                                QStringLiteral("https://static-cdn.jtvnw.net/%zz"), QStringLiteral(" https://static-cdn.jtvnw.net/a"),
+                                QStringLiteral("https://static-cdn.jtvnw.net/a ")})
+            QVERIFY(!isAllowedAssetUrl(QUrl(url, QUrl::StrictMode)));
+        QVERIFY(!isAllowedAssetUrl(QUrl(QStringLiteral("https://cdn.7tv.app/emote.png")), EmoteProvider::Twitch));
+
+        auto result = normalize("channel.chat.message", chat());
+        QVERIFY(result.event);
+        auto event = *result.event;
+        auto &message = std::get<ChatMessage>(event.payload);
+        message.text = QString(9000, QLatin1Char('x')) + QString::fromUtf8("😀");
+        message.fragments = {{ChatFragment::Type::Text, message.text}};
+        message.fragments.front().sourceRange = TextRange{0, message.text.size()};
+        QCOMPARE(validateEvent(event).disposition, ValidationDisposition::Repaired);
+        QCOMPARE(std::get<ChatMessage>(event.payload).text.size(), qsizetype(8192));
+    }
+
+    void securityBoundaryRepairsNestedMetadataAndInvalidColor()
+    {
+        auto input = chat();
+        input["color"] = QStringLiteral("red");
+        auto result = normalize("channel.chat.message", input);
+        QVERIFY(result.event);
+        QVERIFY(!std::get<ChatMessage>(result.event->payload).user.color.isValid());
+
+        auto event = *result.event;
+        auto &message = std::get<ChatMessage>(event.payload);
+        message.badges.push_back({BadgeProvider::Twitch, QStringLiteral("subscriber"), QStringLiteral("1"), {},
+                                  QUrl(QStringLiteral("https://cdn.7tv.app/badge.png"))});
+        message.fragments.front().mention = ChatUser{QStringLiteral("bad id"), {}, {}, {}};
+        message.fragments.front().cheermote = CheermoteMetadata{QStringLiteral("Cheer"), -1, 10};
+        QCOMPARE(validateEvent(event).disposition, ValidationDisposition::Repaired);
+        const auto &validated = std::get<ChatMessage>(event.payload);
+        QVERIFY(validated.badges.back().imageUrl.isEmpty());
+        QVERIFY(!validated.fragments.front().mention);
+        QVERIFY(!validated.fragments.front().cheermote);
+
+        Cheer cheer{{}, 1, QString(QChar(0xD800))};
+        event.payload = cheer;
+        QCOMPARE(validateEvent(event).disposition, ValidationDisposition::Rejected);
     }
 };
 

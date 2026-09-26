@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <variant>
 
+enum class EventOrigin { Production, LocalTransportTest, SyntheticTest };
+
 struct EventHeader {
     QString eventId; // Transport notification ID, distinct from a chat message ID.
     QDateTime timestamp; // UTC, millisecond precision.
@@ -15,6 +17,7 @@ struct EventHeader {
     QString originMessageId;
     std::uint64_t sequence = 0; // Assigned by the producer before enrichment.
     std::uint64_t generation = 0;
+    EventOrigin origin = EventOrigin::Production;
 };
 
 struct MessageDeleted { QString messageId; ChatUser user; };

@@ -31,6 +31,8 @@ public:
     void connectTwitch();
     void addTestMessage();
     void addTestGif();
+    void setEventTestEnabled(bool enabled);
+    void injectSyntheticEvent(SyntheticEventKind kind);
     void checkForUpdates();
     void installUpdate();
 
@@ -82,6 +84,8 @@ private:
     QString channel_;
     QString accessToken_;
     QString refreshToken_;
+    bool eventTestEnabled_ = false;
+    SyntheticEventValues eventTestValues_;
 
     mutable std::mt19937 rng_{std::random_device{}()};
 };

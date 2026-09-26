@@ -16,11 +16,12 @@ TwitchClient::TwitchClient(EventDispatcher &dispatcher, LogCallback log, TokenCa
     : transport_(dependencies.network ? dependencies.network : &network_), dependencies_(std::move(dependencies)),
       log_(std::move(log)), tokens_(std::move(tokens)), pipeline_(dispatcher, log_, dependencies_.network)
 {
+    connectionSettings_ = dependencies_.connectionSettings;
     if (!dependencies_.socketFactory) dependencies_.socketFactory = makeEventSubSocket;
     if (!dependencies_.openBrowser) dependencies_.openBrowser = [](const QUrl &url) { QDesktopServices::openUrl(url); };
     QObject::connect(&devicePollTimer_, &QTimer::timeout, this, [this] { pollDeviceToken(); });
     reconnectTimer_.setSingleShot(true);
-    QObject::connect(&reconnectTimer_, &QTimer::timeout, this, [this] { if (running_) connectEventSub(); });
+    QObject::connect(&reconnectTimer_, &QTimer::timeout, this, [this] { if (running_) connectEventSub(connectionSettings_.websocketUrl); });
     watchdog_.setSingleShot(true);
     QObject::connect(&watchdog_, &QTimer::timeout, this, [this] { scheduleReconnect(); });
     handoffTimer_.setSingleShot(true);
@@ -135,6 +136,19 @@ void TwitchClient::startOrResume()
 {
     Q_ASSERT(QThread::currentThread() == thread());
     if (running_) return;
+    if (connectionSettings_.mode == EventSubConnectionMode::Invalid) {
+        setStatus(connectionSettings_.error); return;
+    }
+    if (connectionSettings_.mode == EventSubConnectionMode::LocalTest) {
+        running_ = true;
+        userId_ = broadcasterId_ = connectionSettings_.channelId;
+        userLogin_ = QStringLiteral("local-test");
+        scopes_ = {QStringLiteral("user:read:chat"), QStringLiteral("moderator:read:followers"), QStringLiteral("bits:read")};
+        pipeline_.setChannel(broadcasterId_, generation_);
+        if (log_) log_(QStringLiteral("[EventSub] Development endpoint override active: %1").arg(connectionSettings_.websocketUrl.toString()));
+        connectEventSub(connectionSettings_.websocketUrl);
+        return;
+    }
     if (configuration_.clientId.isEmpty()) { setStatus(QStringLiteral("Client ID is missing")); return; }
     if (configuration_.accessToken.isEmpty()) { setStatus(QStringLiteral("Not authenticated - click Connect to Twitch")); return; }
     running_ = authenticating_ = true;
@@ -145,6 +159,10 @@ void TwitchClient::startOrResume()
 void TwitchClient::beginDeviceFlow()
 {
     Q_ASSERT(QThread::currentThread() == thread());
+    if (connectionSettings_.mode == EventSubConnectionMode::LocalTest) {
+        startOrResume();
+        return;
+    }
     if (!deviceCode_.isEmpty() || deviceRequestPending_) return;
     if (configuration_.clientId.isEmpty()) { setStatus(QStringLiteral("Client ID is missing")); return; }
     stop(); running_ = true; deviceRequestPending_ = true;
@@ -258,7 +276,7 @@ void TwitchClient::resolveBroadcaster()
         broadcasterId_ = data.first().toObject().value(QStringLiteral("id")).toString();
         if (broadcasterId_.isEmpty()) { setStatus(QStringLiteral("Twitch channel ID is missing")); return; }
         pipeline_.setChannel(broadcasterId_, generation_);
-        connectEventSub();
+        connectEventSub(connectionSettings_.websocketUrl);
     });
 }
 
@@ -278,7 +296,8 @@ void TwitchClient::connectEventSub(const QUrl &url, bool handoff)
     });
     if (handoff) { replacement_ = std::move(socket); handoffTimer_.start(30000); }
     else { socket_ = std::move(socket); watchdog_.start(10000); }
-    setStatus(QStringLiteral("Connecting to EventSub"));
+    setStatus(connectionSettings_.mode == EventSubConnectionMode::LocalTest
+        ? QStringLiteral("LOCAL EVENTSUB TEST MODE - connecting") : QStringLiteral("Connecting to EventSub"));
     sender->open(url);
 }
 
@@ -286,7 +305,8 @@ void TwitchClient::scheduleReconnect()
 {
     if (!running_ || reconnectTimer_.isActive()) return;
     watchdog_.stop(); handoffTimer_.stop(); closeSockets();
-    setStatus(QStringLiteral("EventSub disconnected - retrying"));
+    setStatus(connectionSettings_.mode == EventSubConnectionMode::LocalTest
+        ? QStringLiteral("LOCAL EVENTSUB TEST MODE - disconnected, retrying") : QStringLiteral("EventSub disconnected - retrying"));
     reconnectTimer_.start(retryMs_);
     retryMs_ = std::min(retryMs_ * 2, 30000);
 }
@@ -322,11 +342,11 @@ void TwitchClient::handleEventSubMessage(EventSubSocket *sender, const QString &
     if (type == QStringLiteral("session_keepalive") || type == QStringLiteral("notification")) watchdog_.start(keepaliveMs_);
     if (type == QStringLiteral("session_reconnect")) {
         if (replacement_) return;
-        const QUrl url(data.value(QStringLiteral("session")).toObject().value(QStringLiteral("reconnect_url")).toString());
-        if (url.isValid() && url.scheme() == QStringLiteral("wss")) connectEventSub(url, true);
+        const QUrl url(data.value(QStringLiteral("session")).toObject().value(QStringLiteral("reconnect_url")).toString(), QUrl::StrictMode);
+        if (isAllowedEventSubReconnectUrl(url, connectionSettings_)) connectEventSub(url, true);
     } else if (type == QStringLiteral("notification")) {
-        const auto result = pipeline_.ingest(bytes);
-        if (result == IngestResult::Invalid && log_) log_(QStringLiteral("Ignored an invalid EventSub notification"));
+        (void)pipeline_.ingest(bytes, connectionSettings_.mode == EventSubConnectionMode::LocalTest
+            ? EventOrigin::LocalTransportTest : EventOrigin::Production);
     } else if (type == QStringLiteral("revocation")) {
         const auto subType = data.value(QStringLiteral("subscription")).toObject().value(QStringLiteral("type")).toString();
         if (subscriptions_.contains(subType)) subscriptions_[subType] = TwitchSubscriptionState::Revoked;
@@ -361,7 +381,14 @@ void TwitchClient::subscribeOne(QString type, QString version, QJsonObject condi
     subscriptions_[type] = TwitchSubscriptionState::Pending;
     const auto sessionGeneration = sessionGeneration_;
     const auto generation = generation_;
-    finish(transport_->post(apiRequest(QUrl(QStringLiteral("https://api.twitch.tv/helix/eventsub/subscriptions"))),
+    QNetworkRequest request = connectionSettings_.mode == EventSubConnectionMode::LocalTest
+        ? QNetworkRequest(connectionSettings_.subscriptionUrl) : apiRequest(connectionSettings_.subscriptionUrl);
+    if (connectionSettings_.mode == EventSubConnectionMode::LocalTest) {
+        request.setTransferTimeout(10000);
+        request.setRawHeader("Client-Id", "bokis-local-eventsub-test");
+        request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    }
+    finish(transport_->post(request,
         QJsonDocument(body).toJson(QJsonDocument::Compact)),
         [this, type, version, condition, attempt, sessionGeneration, generation](int status, const QJsonObject &) {
         if (sessionGeneration != sessionGeneration_) return;
@@ -387,5 +414,7 @@ void TwitchClient::updateConnectionStatus()
     unavailable.sort();
     QString status = QStringLiteral("EventSub: %1 subscriptions active").arg(enabled);
     if (!unavailable.isEmpty()) status += QStringLiteral("; unavailable (check authorization): ") + unavailable.join(QStringLiteral(", "));
+    if (connectionSettings_.mode == EventSubConnectionMode::LocalTest)
+        status.prepend(QStringLiteral("LOCAL EVENTSUB TEST MODE - "));
     setStatus(std::move(status));
 }
