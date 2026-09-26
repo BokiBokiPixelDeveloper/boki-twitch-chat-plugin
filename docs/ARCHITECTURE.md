@@ -12,13 +12,20 @@ Bokis Twitch Chat Plugin should support multiple presentation modes from one Twi
 
 Individual visual styles must never become product-level identifiers. They belong only to specific renderer modes.
 
-## Intended shared pipeline
+## Shared pipeline
+
+The [internal event foundation](EVENT_FOUNDATION.md) supplies the normalized event
+variant, pure Twitch normalizer, ordered enrichment, and RAII mailbox dispatcher.
+`PluginRuntime` owns one application-thread Twitch client. Compatible sources
+attach independent consumer mailboxes; conflicting settings produce a visible
+status instead of a second connection. Future consumers subscribe to the same
+runtime. See [the integration report](TWITCH_PRODUCER_INTEGRATION.md).
 
 ```text
 Twitch Device Flow / EventSub
             |
             v
-   Normalized ChatMessage
+   Normalized PluginEvent
             |
       Message Bus/Core
       /             \
@@ -31,7 +38,7 @@ OBS render loop    HTML/CSS/JS themes
 
 ## Core responsibilities
 
-The shared core should eventually own:
+The shared backend owns:
 
 - Twitch authentication and EventSub lifecycle
 - normalized users, text fragments, emotes, badges and GIFs

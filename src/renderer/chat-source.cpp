@@ -66,13 +66,32 @@ bool buttonInstallUpdate(obs_properties_t *, obs_property_t *, void *data)
 }
 } // namespace
 
-ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source) : source_(source)
+ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source, std::shared_ptr<PluginRuntime> runtime)
+    : source_(source), runtime_(std::move(runtime))
 {
-    twitch_ = std::make_unique<TwitchClient>(
-        [this](ChatMessage msg) { enqueueMessage(std::move(msg)); },
-        [this](DecodedGif gif) { enqueueGif(std::move(gif)); },
-        [this](QString state) { status_ = std::move(state); },
-        [this](QString access, QString refresh) { persistTokens(access, refresh); });
+    // Promotion protects OBS source lifetime; queued delivery never captures this.
+    const auto weakSource = std::shared_ptr<obs_weak_source_t>(obs_source_get_weak_source(source), obs_weak_source_release);
+    backend_ = runtime_->attach([adapter = adapter_, weakSource, previousStatus = std::make_shared<QString>()](BackendAttachment::Delivery delivery) {
+        const bool statusChanged = delivery.status != *previousStatus;
+        *previousStatus = delivery.status;
+        if (delivery.tokens || statusChanged) {
+            if (auto *source = obs_weak_source_get_source(weakSource.get())) {
+                obs_data_t *settings = obs_source_get_settings(source);
+                const auto &expected = delivery.tokenSettings;
+                if (delivery.tokens && QString::fromUtf8(obs_data_get_string(settings, S_CLIENT_ID)).trimmed() == expected.clientId &&
+                    QString::fromUtf8(obs_data_get_string(settings, S_CHANNEL)).trimmed().toLower() == expected.channel &&
+                    QString::fromUtf8(obs_data_get_string(settings, S_ACCESS_TOKEN)) == expected.accessToken &&
+                    QString::fromUtf8(obs_data_get_string(settings, S_REFRESH_TOKEN)) == expected.refreshToken) {
+                    obs_data_set_string(settings, S_ACCESS_TOKEN, delivery.tokens->accessToken.toUtf8().constData());
+                    obs_data_set_string(settings, S_REFRESH_TOKEN, delivery.tokens->refreshToken.toUtf8().constData());
+                }
+                obs_data_release(settings);
+                if (statusChanged) obs_source_update_properties(source);
+                obs_source_release(source);
+            }
+        }
+        adapter->accept(std::move(delivery));
+    });
 
     updater_ = std::make_unique<UpdateChecker>(QString::fromUtf8(BOKIS_TWITCH_CHAT_VERSION), [this]() {
         if (source_)
@@ -80,7 +99,6 @@ ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source) : source_(sou
     });
 
     update(settings);
-    twitch_->startOrResume();
 
     if (obs_data_get_bool(settings, S_AUTO_UPDATE_CHECK)) {
         QTimer::singleShot(2500, updater_.get(), [this]() {
@@ -93,8 +111,9 @@ ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source) : source_(sou
 ChatSource::~ChatSource()
 {
     updater_.reset(); // Invalidate queued updater UI notifications before source teardown.
-    twitch_->disconnect();
-    twitch_.reset();
+    adapter_->close();
+    backend_->close();
+    backend_.reset();
     obs_enter_graphics();
     for (auto &m : messages_) {
         destroyTexture(m.texture);
@@ -110,6 +129,7 @@ ChatSource::~ChatSource()
 
 void ChatSource::update(obs_data_t *settings)
 {
+    std::lock_guard lock(sourceMutex_);
     canvasWidth_ = static_cast<uint32_t>(obs_data_get_int(settings, S_CANVAS_W));
     canvasHeight_ = static_cast<uint32_t>(obs_data_get_int(settings, S_CANVAS_H));
     laneCount_ = static_cast<int>(obs_data_get_int(settings, S_LANES));
@@ -145,59 +165,27 @@ void ChatSource::update(obs_data_t *settings)
     maxGifs_ = std::clamp(maxGifs_, 0, 30);
     gifLifetimeSeconds_ = std::clamp(gifLifetimeSeconds_, 2.0f, 120.0f);
 
-    twitch_->configure(clientId_, channel_, accessToken_, refreshToken_);
+    adapter_->configure({fontFamily_, fontWeight_, outlineWidthPx_, minFontPx_, maxFontPx_, minSpeed_, maxSpeed_});
+    backend_->configure({clientId_, channel_, accessToken_, refreshToken_});
 }
 
 void ChatSource::enqueueMessage(ChatMessage message)
 {
-    // Rasterize at the FINAL font size before the OBS video thread sees the message.
-    // alpha2 rendered everything at maxFontPx_ and scaled the texture down, which made
-    // small text look soft/warped. Keeping QPainter off video_tick also avoids a render hitch.
-    int pendingCount = 0;
-    {
-        QMutexLocker lock(&pendingMutex_);
-        pendingCount = static_cast<int>(pendingMessages_.size());
-    }
-
-    const float pressure = std::clamp((static_cast<float>(activeMessageCount_.load()) + pendingCount) / 18.0f, 0.0f, 1.0f);
-    const float lengthPressure = std::clamp((message.text.size() - 70.0f) / 180.0f, 0.0f, 1.0f);
-    const float density = std::max(pressure, lengthPressure * 0.85f);
-    const int fontPx = static_cast<int>(std::round(maxFontPx_ - density * (maxFontPx_ - minFontPx_)));
-    PreparedMessage prepared;
-    prepared.speed = minSpeed_ + std::max(pressure, lengthPressure) * (maxSpeed_ - minSpeed_);
-    prepared.layout = layoutMessage(message, fontFamily_, fontWeight_, fontPx, outlineWidthPx_);
-
-    QMutexLocker lock(&pendingMutex_);
-    if (pendingMessages_.size() >= 128)
-        pendingMessages_.pop_front();
-    pendingMessages_.push_back(std::move(prepared));
+    adapter_->enqueue(std::move(message));
 }
 
 void ChatSource::enqueueGif(DecodedGif gif)
 {
-    QMutexLocker lock(&pendingMutex_);
-    if (pendingGifs_.size() >= 30)
-        pendingGifs_.pop_front();
-    pendingGifs_.push_back(std::move(gif));
-}
-
-void ChatSource::persistTokens(const QString &accessToken, const QString &refreshToken)
-{
-    accessToken_ = accessToken;
-    refreshToken_ = refreshToken;
-    obs_data_t *settings = obs_source_get_settings(source_);
-    obs_data_set_string(settings, S_ACCESS_TOKEN, accessToken.toUtf8().constData());
-    obs_data_set_string(settings, S_REFRESH_TOKEN, refreshToken.toUtf8().constData());
-    obs_source_update(source_, settings);
-    obs_data_release(settings);
+    adapter_->enqueueGif(std::move(gif));
 }
 
 void ChatSource::connectTwitch()
 {
+    std::lock_guard lock(sourceMutex_);
     obs_data_t *settings = obs_source_get_settings(source_);
     update(settings);
     obs_data_release(settings);
-    twitch_->beginDeviceFlow();
+    backend_->connect();
 }
 
 void ChatSource::checkForUpdates()
@@ -214,6 +202,7 @@ void ChatSource::installUpdate()
 
 void ChatSource::addTestMessage()
 {
+    std::lock_guard lock(sourceMutex_);
     ChatMessage message{QStringLiteral("Boki"), QStringLiteral("Emojis: 👀 ❤️ 👍🏽 👨‍👩‍👧‍👦 🇩🇪  Emotes: Static Animated"),
                         QColor(QStringLiteral("#b68cff"))};
     auto animation = std::make_shared<DecodedImage>();
@@ -247,6 +236,7 @@ void ChatSource::addTestMessage()
 
 void ChatSource::addTestGif()
 {
+    std::lock_guard lock(sourceMutex_);
     blog(LOG_INFO, "[bokis-twitch-chat-plugin] Native test GIF requested");
     DecodedGif gif;
     constexpr int frames = 18;
@@ -277,7 +267,8 @@ void ChatSource::addTestGif()
 
 QString ChatSource::status() const
 {
-    return status_;
+    std::lock_guard lock(sourceMutex_);
+    return backend_->status();
 }
 
 float ChatSource::collisionScore(float x, float y, float w, float h, float speed) const
@@ -338,12 +329,37 @@ float ChatSource::chooseY(float messageHeight, float messageWidth, float speed)
 void ChatSource::consumePending()
 {
     std::deque<PreparedMessage> newMessages;
-    std::deque<DecodedGif> newGifs;
+    std::deque<PreparedGif> newGifs;
+    std::deque<EventPtr> controls;
+    bool reset = false;
+    std::uint64_t revision;
     {
-        QMutexLocker lock(&pendingMutex_);
-        newMessages.swap(pendingMessages_);
-        newGifs.swap(pendingGifs_);
+        QMutexLocker lock(&adapter_->mutex);
+        newMessages.swap(adapter_->messages);
+        newGifs.swap(adapter_->gifs);
+        controls.swap(adapter_->controls);
+        reset = std::exchange(adapter_->reset, false);
+        revision = adapter_->queueRevision;
     }
+
+    auto remove = [&](const MessageIdentity &identity) {
+        return std::any_of(controls.begin(), controls.end(), [&](const auto &control) {
+            return NativeEventAdapter::removes(*control, identity);
+        });
+    };
+    std::erase_if(newMessages, [&](const auto &message) { return remove(message.identity); });
+    std::erase_if(newGifs, [&](const auto &gif) { return remove(gif.identity); });
+    std::erase_if(messages_, [&](auto &message) {
+        if (!reset && !remove(message.identity)) return false;
+        if (message.texture) deferredDestroy_.push_back(message.texture);
+        for (const auto &emote : message.emotes) if (emote.texture) deferredDestroy_.push_back(emote.texture);
+        return true;
+    });
+    std::erase_if(gifs_, [&](auto &gif) {
+        if (!reset && !remove(gif.identity)) return false;
+        if (gif.texture) deferredDestroy_.push_back(gif.texture);
+        return true;
+    });
 
     while (!newMessages.empty() && static_cast<int>(messages_.size()) < maxMessages_) {
         PreparedMessage pending = std::move(newMessages.front());
@@ -352,6 +368,7 @@ void ChatSource::consumePending()
         if (pending.layout.text.isNull())
             continue;
         RenderMessage msg;
+        msg.identity = std::move(pending.identity);
         msg.width = static_cast<float>(pending.layout.text.width());
         msg.height = static_cast<float>(pending.layout.text.height());
         msg.image = std::move(pending.layout.text);
@@ -364,16 +381,9 @@ void ChatSource::consumePending()
         blog(LOG_INFO, "[bokis-twitch-chat-plugin] Spawned message; active=%zu", messages_.size());
     }
 
-    if (!newMessages.empty()) {
-        QMutexLocker lock(&pendingMutex_);
-        while (!newMessages.empty()) {
-            pendingMessages_.push_front(std::move(newMessages.back()));
-            newMessages.pop_back();
-        }
-    }
-
     while (!newGifs.empty() && static_cast<int>(gifs_.size()) < maxGifs_) {
-        DecodedGif decoded = std::move(newGifs.front());
+        auto pending = std::move(newGifs.front());
+        DecodedGif decoded = std::move(pending.decoded);
         newGifs.pop_front();
         if (decoded.frames.empty())
             continue;
@@ -383,6 +393,7 @@ void ChatSource::consumePending()
         std::uniform_int_distribution<int> sign(0, 1);
 
         RenderGif gif;
+        gif.identity = std::move(pending.identity);
         gif.decoded = std::move(decoded);
         gif.x = rx(rng_);
         gif.y = ry(rng_);
@@ -396,17 +407,12 @@ void ChatSource::consumePending()
         blog(LOG_INFO, "[bokis-twitch-chat-plugin] Spawned GIF; active=%zu", gifs_.size());
     }
 
-    if (!newGifs.empty()) {
-        QMutexLocker lock(&pendingMutex_);
-        while (!newGifs.empty()) {
-            pendingGifs_.push_front(std::move(newGifs.back()));
-            newGifs.pop_back();
-        }
-    }
+    adapter_->returnPending(std::move(newMessages), std::move(newGifs), revision);
 }
 
 void ChatSource::tick(float seconds)
 {
+    std::lock_guard lock(sourceMutex_);
     consumePending();
 
     // Native OBS timing: no browser clock and no catch-up clamp. Speed remains true px/s.
@@ -441,7 +447,7 @@ void ChatSource::tick(float seconds)
         return true;
     });
     messages_.erase(msgIt, messages_.end());
-    activeMessageCount_.store(static_cast<int>(messages_.size()));
+    adapter_->activeCount.store(static_cast<int>(messages_.size()));
 
     auto gifIt = std::remove_if(gifs_.begin(), gifs_.end(), [this](const RenderGif &g) {
         if (g.ageSeconds < g.lifetimeSeconds)
@@ -481,6 +487,7 @@ void ChatSource::destroyTexture(void *&texture)
 
 void ChatSource::render()
 {
+    std::lock_guard lock(sourceMutex_);
     for (void *texture : deferredDestroy_) {
         if (texture)
             gs_texture_destroy(static_cast<gs_texture_t *>(texture));
@@ -560,12 +567,13 @@ void ChatSource::render()
 
 obs_properties_t *ChatSource::properties()
 {
+    std::lock_guard lock(sourceMutex_);
     obs_properties_t *props = obs_properties_create();
 
     obs_properties_t *twitch = obs_properties_create();
     obs_properties_add_text(twitch, S_CLIENT_ID, "Twitch Client ID", OBS_TEXT_DEFAULT);
     obs_properties_add_text(twitch, S_CHANNEL, "Channel (login name)", OBS_TEXT_DEFAULT);
-    const QByteArray statusUtf8 = QStringLiteral("Status: %1").arg(status_).toUtf8();
+    const QByteArray statusUtf8 = QStringLiteral("Status: %1").arg(backend_->status()).toUtf8();
     obs_properties_add_text(twitch, "status_info", statusUtf8.constData(), OBS_TEXT_INFO);
     obs_properties_add_button2(twitch, "connect_twitch", "Connect to Twitch (Device Flow)", buttonConnect, this);
     obs_properties_add_group(props, "twitch_group", "Twitch", OBS_GROUP_NORMAL, twitch);

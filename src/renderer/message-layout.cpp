@@ -66,9 +66,9 @@ MessageLayout layoutMessage(const ChatMessage &message, const QString &fontFamil
     document.setDefaultTextOption(option);
     QTextCursor cursor(&document);
     QTextCharFormat format;
-    format.setForeground(message.userColor.isValid() ? message.userColor : QColor(0x91, 0xC8, 0xFF));
+    format.setForeground(message.user.color.isValid() ? message.user.color : QColor(0x91, 0xC8, 0xFF));
     format.setFontWeight(std::max(fontWeight, 600));
-    cursor.insertText(message.userName + QStringLiteral(": "), format);
+    cursor.insertText(message.user.displayName + QStringLiteral(": "), format);
     format.setFontWeight(fontWeight);
     format.setForeground(Qt::white);
     auto fragments = message.fragments;

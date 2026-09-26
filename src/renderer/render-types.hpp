@@ -1,8 +1,21 @@
 #pragma once
 
 #include "renderer/message-layout.hpp"
+#include "core/event-types.hpp"
+
+struct MessageIdentity {
+    EventHeader header;
+    QString messageId;
+    QString userId;
+};
+
+struct PreparedGif {
+    DecodedGif decoded;
+    MessageIdentity identity;
+};
 
 struct PreparedMessage {
+    MessageIdentity identity;
     MessageLayout layout;
     float speed = 500.0f;
 };
@@ -16,6 +29,7 @@ struct RenderEmote {
 };
 
 struct RenderMessage {
+    MessageIdentity identity;
     QImage image;
     std::vector<RenderEmote> emotes;
     void *texture = nullptr;
@@ -27,6 +41,7 @@ struct RenderMessage {
 };
 
 struct RenderGif {
+    MessageIdentity identity;
     DecodedGif decoded;
     void *texture = nullptr;
     float x = 0.0f;

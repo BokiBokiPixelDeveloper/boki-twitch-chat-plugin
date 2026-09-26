@@ -1,0 +1,544 @@
+[
+  {
+    "kind": "ChatMessage",
+    "envelope": {
+      "metadata": {
+        "message_id": "notification-001",
+        "message_type": "notification",
+        "message_timestamp": "2026-09-26T12:00:01.123456789Z",
+        "subscription_type": "channel.chat.message",
+        "subscription_version": "1"
+      },
+      "payload": {
+        "subscription": {
+          "id": "subscription-channel.chat.message",
+          "type": "channel.chat.message",
+          "version": "1",
+          "status": "enabled",
+          "transport": {
+            "method": "websocket",
+            "session_id": "session-one"
+          }
+        },
+        "event": {
+          "broadcaster_user_id": "100",
+          "broadcaster_user_login": "broadcaster",
+          "broadcaster_user_name": "Broadcaster",
+          "message_id": "chat-001",
+          "chatter_user_id": "200",
+          "chatter_user_login": "viewer",
+          "chatter_user_name": "雪Viewer👋",
+          "color": "#AB12EF",
+          "badges": [
+            {
+              "set_id": "subscriber",
+              "id": "12",
+              "info": "14"
+            }
+          ],
+          "message_type": "text",
+          "message": {
+            "text": "Hi 👋 Kappa Dance Hello Alias",
+            "fragments": [
+              {
+                "type": "text",
+                "text": "Hi 👋 "
+              },
+              {
+                "type": "emote",
+                "text": "Kappa",
+                "emote": {
+                  "id": "25",
+                  "emote_set_id": "0",
+                  "owner_id": "0",
+                  "format": [
+                    "static",
+                    "animated"
+                  ]
+                }
+              },
+              {
+                "type": "text",
+                "text": " Dance Hello Alias"
+              }
+            ]
+          },
+          "reply": {
+            "parent_message_id": "parent-001",
+            "thread_message_id": "thread-001"
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "MessageDeleted",
+    "envelope": {
+      "metadata": {
+        "message_id": "notification-002",
+        "message_type": "notification",
+        "message_timestamp": "2026-09-26T12:00:02.123456789Z",
+        "subscription_type": "channel.chat.message_delete",
+        "subscription_version": "1"
+      },
+      "payload": {
+        "subscription": {
+          "id": "subscription-channel.chat.message_delete",
+          "type": "channel.chat.message_delete",
+          "version": "1",
+          "status": "enabled",
+          "transport": {
+            "method": "websocket",
+            "session_id": "session-one"
+          }
+        },
+        "event": {
+          "broadcaster_user_id": "100",
+          "broadcaster_user_login": "broadcaster",
+          "broadcaster_user_name": "Broadcaster",
+          "message_id": "chat-001",
+          "target_user_id": "200",
+          "target_user_login": "viewer",
+          "target_user_name": "雪Viewer👋"
+        }
+      }
+    }
+  },
+  {
+    "kind": "ChatCleared",
+    "envelope": {
+      "metadata": {
+        "message_id": "notification-003",
+        "message_type": "notification",
+        "message_timestamp": "2026-09-26T12:00:03.123456789Z",
+        "subscription_type": "channel.chat.clear",
+        "subscription_version": "1"
+      },
+      "payload": {
+        "subscription": {
+          "id": "subscription-channel.chat.clear",
+          "type": "channel.chat.clear",
+          "version": "1",
+          "status": "enabled",
+          "transport": {
+            "method": "websocket",
+            "session_id": "session-one"
+          }
+        },
+        "event": {
+          "broadcaster_user_id": "100",
+          "broadcaster_user_login": "broadcaster",
+          "broadcaster_user_name": "Broadcaster"
+        }
+      }
+    }
+  },
+  {
+    "kind": "ChatCleared",
+    "envelope": {
+      "metadata": {
+        "message_id": "notification-004",
+        "message_type": "notification",
+        "message_timestamp": "2026-09-26T12:00:04.123456789Z",
+        "subscription_type": "channel.chat.clear_user_messages",
+        "subscription_version": "1"
+      },
+      "payload": {
+        "subscription": {
+          "id": "subscription-channel.chat.clear_user_messages",
+          "type": "channel.chat.clear_user_messages",
+          "version": "1",
+          "status": "enabled",
+          "transport": {
+            "method": "websocket",
+            "session_id": "session-one"
+          }
+        },
+        "event": {
+          "broadcaster_user_id": "100",
+          "broadcaster_user_login": "broadcaster",
+          "broadcaster_user_name": "Broadcaster",
+          "target_user_id": "201",
+          "target_user_login": "another",
+          "target_user_name": "Another"
+        }
+      }
+    }
+  },
+  {
+    "kind": "Follow",
+    "envelope": {
+      "metadata": {
+        "message_id": "notification-005",
+        "message_type": "notification",
+        "message_timestamp": "2026-09-26T12:00:05.123456789Z",
+        "subscription_type": "channel.follow",
+        "subscription_version": "2"
+      },
+      "payload": {
+        "subscription": {
+          "id": "subscription-channel.follow",
+          "type": "channel.follow",
+          "version": "2",
+          "status": "enabled",
+          "transport": {
+            "method": "websocket",
+            "session_id": "session-one"
+          }
+        },
+        "event": {
+          "broadcaster_user_id": "100",
+          "broadcaster_user_login": "broadcaster",
+          "broadcaster_user_name": "Broadcaster",
+          "user_id": "202",
+          "user_login": "follower",
+          "user_name": "NewFollower",
+          "followed_at": "2026-09-26T11:59:59Z"
+        }
+      }
+    }
+  },
+  {
+    "kind": "Subscription",
+    "envelope": {
+      "metadata": {
+        "message_id": "notification-006",
+        "message_type": "notification",
+        "message_timestamp": "2026-09-26T12:00:06.123456789Z",
+        "subscription_type": "channel.chat.notification",
+        "subscription_version": "1"
+      },
+      "payload": {
+        "subscription": {
+          "id": "subscription-channel.chat.notification",
+          "type": "channel.chat.notification",
+          "version": "1",
+          "status": "enabled",
+          "transport": {
+            "method": "websocket",
+            "session_id": "session-one"
+          }
+        },
+        "event": {
+          "broadcaster_user_id": "100",
+          "broadcaster_user_login": "broadcaster",
+          "broadcaster_user_name": "Broadcaster",
+          "message_id": "notice-sub",
+          "chatter_user_id": "200",
+          "chatter_user_login": "viewer",
+          "chatter_user_name": "雪Viewer👋",
+          "color": "#AB12EF",
+          "badges": [
+            {
+              "set_id": "subscriber",
+              "id": "12",
+              "info": "14"
+            }
+          ],
+          "message_type": "text",
+          "message": {
+            "text": "",
+            "fragments": []
+          },
+          "reply": {
+            "parent_message_id": "parent-001",
+            "thread_message_id": "thread-001"
+          },
+          "notice_type": "sub",
+          "chatter_is_anonymous": false,
+          "system_message": "Synthetic subscription notice",
+          "sub": {
+            "sub_tier": "1000",
+            "is_prime": true,
+            "duration_months": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "Resubscription",
+    "envelope": {
+      "metadata": {
+        "message_id": "notification-007",
+        "message_type": "notification",
+        "message_timestamp": "2026-09-26T12:00:07.123456789Z",
+        "subscription_type": "channel.chat.notification",
+        "subscription_version": "1"
+      },
+      "payload": {
+        "subscription": {
+          "id": "subscription-channel.chat.notification",
+          "type": "channel.chat.notification",
+          "version": "1",
+          "status": "enabled",
+          "transport": {
+            "method": "websocket",
+            "session_id": "session-one"
+          }
+        },
+        "event": {
+          "broadcaster_user_id": "100",
+          "broadcaster_user_login": "broadcaster",
+          "broadcaster_user_name": "Broadcaster",
+          "message_id": "notice-resub",
+          "chatter_user_id": "200",
+          "chatter_user_login": "viewer",
+          "chatter_user_name": "雪Viewer👋",
+          "color": "#AB12EF",
+          "badges": [
+            {
+              "set_id": "subscriber",
+              "id": "12",
+              "info": "14"
+            }
+          ],
+          "message_type": "text",
+          "message": {
+            "text": "Thanks 💜",
+            "fragments": []
+          },
+          "reply": {
+            "parent_message_id": "parent-001",
+            "thread_message_id": "thread-001"
+          },
+          "notice_type": "resub",
+          "chatter_is_anonymous": false,
+          "system_message": "Synthetic subscription notice",
+          "resub": {
+            "sub_tier": "2000",
+            "is_prime": false,
+            "duration_months": 1,
+            "cumulative_months": 24,
+            "streak_months": null,
+            "is_gift": false
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "GiftSubscription",
+    "envelope": {
+      "metadata": {
+        "message_id": "notification-008",
+        "message_type": "notification",
+        "message_timestamp": "2026-09-26T12:00:08.123456789Z",
+        "subscription_type": "channel.chat.notification",
+        "subscription_version": "1"
+      },
+      "payload": {
+        "subscription": {
+          "id": "subscription-channel.chat.notification",
+          "type": "channel.chat.notification",
+          "version": "1",
+          "status": "enabled",
+          "transport": {
+            "method": "websocket",
+            "session_id": "session-one"
+          }
+        },
+        "event": {
+          "broadcaster_user_id": "100",
+          "broadcaster_user_login": "broadcaster",
+          "broadcaster_user_name": "Broadcaster",
+          "message_id": "notice-sub_gift",
+          "chatter_user_id": null,
+          "chatter_user_login": null,
+          "chatter_user_name": "AnAnonymousGifter",
+          "color": "#AB12EF",
+          "badges": [
+            {
+              "set_id": "subscriber",
+              "id": "12",
+              "info": "14"
+            }
+          ],
+          "message_type": "text",
+          "message": {
+            "text": "",
+            "fragments": []
+          },
+          "reply": {
+            "parent_message_id": "parent-001",
+            "thread_message_id": "thread-001"
+          },
+          "notice_type": "sub_gift",
+          "chatter_is_anonymous": true,
+          "system_message": "Synthetic subscription notice",
+          "sub_gift": {
+            "sub_tier": "1000",
+            "duration_months": 1,
+            "recipient_user_id": "203",
+            "recipient_user_login": "recipient",
+            "recipient_user_name": "Recipient",
+            "community_gift_id": "mass-001",
+            "cumulative_total": null
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "CommunityGiftSubscription",
+    "envelope": {
+      "metadata": {
+        "message_id": "notification-009",
+        "message_type": "notification",
+        "message_timestamp": "2026-09-26T12:00:09.123456789Z",
+        "subscription_type": "channel.chat.notification",
+        "subscription_version": "1"
+      },
+      "payload": {
+        "subscription": {
+          "id": "subscription-channel.chat.notification",
+          "type": "channel.chat.notification",
+          "version": "1",
+          "status": "enabled",
+          "transport": {
+            "method": "websocket",
+            "session_id": "session-one"
+          }
+        },
+        "event": {
+          "broadcaster_user_id": "100",
+          "broadcaster_user_login": "broadcaster",
+          "broadcaster_user_name": "Broadcaster",
+          "message_id": "notice-community_sub_gift",
+          "chatter_user_id": null,
+          "chatter_user_login": null,
+          "chatter_user_name": "AnAnonymousGifter",
+          "color": "#AB12EF",
+          "badges": [
+            {
+              "set_id": "subscriber",
+              "id": "12",
+              "info": "14"
+            }
+          ],
+          "message_type": "text",
+          "message": {
+            "text": "",
+            "fragments": []
+          },
+          "reply": {
+            "parent_message_id": "parent-001",
+            "thread_message_id": "thread-001"
+          },
+          "notice_type": "community_sub_gift",
+          "chatter_is_anonymous": true,
+          "system_message": "Synthetic subscription notice",
+          "community_sub_gift": {
+            "sub_tier": "1000",
+            "id": "mass-001",
+            "total": 5,
+            "cumulative_total": null
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "Cheer",
+    "envelope": {
+      "metadata": {
+        "message_id": "notification-010",
+        "message_type": "notification",
+        "message_timestamp": "2026-09-26T12:00:10.123456789Z",
+        "subscription_type": "channel.cheer",
+        "subscription_version": "1"
+      },
+      "payload": {
+        "subscription": {
+          "id": "subscription-channel.cheer",
+          "type": "channel.cheer",
+          "version": "1",
+          "status": "enabled",
+          "transport": {
+            "method": "websocket",
+            "session_id": "session-one"
+          }
+        },
+        "event": {
+          "broadcaster_user_id": "100",
+          "broadcaster_user_login": "broadcaster",
+          "broadcaster_user_name": "Broadcaster",
+          "is_anonymous": false,
+          "user_id": "204",
+          "user_login": "cheerer",
+          "user_name": "BitsFan",
+          "bits": 100,
+          "message": "Cheer100 Great stream 💜"
+        }
+      }
+    }
+  },
+  {
+    "kind": "Cheer",
+    "envelope": {
+      "metadata": {
+        "message_id": "notification-011",
+        "message_type": "notification",
+        "message_timestamp": "2026-09-26T12:00:11.123456789Z",
+        "subscription_type": "channel.cheer",
+        "subscription_version": "1"
+      },
+      "payload": {
+        "subscription": {
+          "id": "subscription-channel.cheer",
+          "type": "channel.cheer",
+          "version": "1",
+          "status": "enabled",
+          "transport": {
+            "method": "websocket",
+            "session_id": "session-one"
+          }
+        },
+        "event": {
+          "broadcaster_user_id": "100",
+          "broadcaster_user_login": "broadcaster",
+          "broadcaster_user_name": "Broadcaster",
+          "is_anonymous": true,
+          "user_id": null,
+          "user_login": null,
+          "user_name": null,
+          "bits": 50,
+          "message": "Anonymous cheer"
+        }
+      }
+    }
+  },
+  {
+    "kind": "Raid",
+    "envelope": {
+      "metadata": {
+        "message_id": "notification-012",
+        "message_type": "notification",
+        "message_timestamp": "2026-09-26T12:00:12.123456789Z",
+        "subscription_type": "channel.raid",
+        "subscription_version": "1"
+      },
+      "payload": {
+        "subscription": {
+          "id": "subscription-channel.raid",
+          "type": "channel.raid",
+          "version": "1",
+          "status": "enabled",
+          "transport": {
+            "method": "websocket",
+            "session_id": "session-one"
+          }
+        },
+        "event": {
+          "from_broadcaster_user_id": "205",
+          "from_broadcaster_user_login": "raider",
+          "from_broadcaster_user_name": "Raid友",
+          "to_broadcaster_user_id": "100",
+          "to_broadcaster_user_login": "broadcaster",
+          "to_broadcaster_user_name": "Broadcaster",
+          "viewers": 42
+        }
+      }
+    }
+  }
+]

@@ -25,49 +25,13 @@ QString largestUrl(const QJsonObject &urls)
 }
 } // namespace
 
-ChatMessage parseTwitchMessage(const QJsonObject &event)
-{
-    ChatMessage out;
-    out.userName = event.value(QStringLiteral("chatter_user_name")).toString();
-    const QColor color(event.value(QStringLiteral("color")).toString());
-    if (color.isValid())
-        out.userColor = color;
-    const auto message = event.value(QStringLiteral("message")).toObject();
-    out.text = message.value(QStringLiteral("text")).toString();
-    QString fragmentText;
-    for (const auto &value : message.value(QStringLiteral("fragments")).toArray()) {
-        const auto part = value.toObject();
-        ChatFragment fragment;
-        fragment.text = part.value(QStringLiteral("text")).toString();
-        if (part.value(QStringLiteral("type")).toString() == QStringLiteral("emote")) {
-            const auto emote = part.value(QStringLiteral("emote")).toObject();
-            fragment.emoteId = emote.value(QStringLiteral("id")).toString();
-            static const QRegularExpression validId(QStringLiteral("^[A-Za-z0-9_-]+$"));
-            if (validId.match(fragment.emoteId).hasMatch()) {
-                fragment.type = ChatFragment::Type::Emote;
-                const auto formats = emote.value(QStringLiteral("format")).toArray();
-                const QString format = formats.contains(QStringLiteral("animated")) ? QStringLiteral("animated")
-                    : formats.isEmpty() ? QStringLiteral("default") : QStringLiteral("static");
-                const QString base = QStringLiteral("https://static-cdn.jtvnw.net/emoticons/v2/%1/").arg(fragment.emoteId);
-                fragment.imageUrl = QUrl(base + format + QStringLiteral("/dark/3.0"));
-                fragment.fallbackUrl = QUrl(base + QStringLiteral("static/dark/3.0"));
-            }
-        }
-        fragmentText += fragment.text;
-        out.fragments.push_back(std::move(fragment));
-    }
-    // A malformed/partial fragments array must never silently discard message text.
-    if (fragmentText != out.text || out.fragments.empty())
-        out.fragments = {{ChatFragment::Type::Text, out.text}};
-    return out;
-}
-
 QHash<QString, ChatFragment> parseEmoteCatalog(EmoteProvider provider, const QJsonDocument &document)
 {
     QHash<QString, ChatFragment> out;
     auto add = [&](ChatFragment fragment) {
         if (!fragment.text.isEmpty() && !fragment.imageUrl.isEmpty() && out.size() < 10000) {
             fragment.type = ChatFragment::Type::Emote;
+            fragment.provider = provider;
             out.insert(fragment.text, std::move(fragment));
         }
     };
@@ -109,7 +73,7 @@ QHash<QString, ChatFragment> parseEmoteCatalog(EmoteProvider provider, const QJs
                 add(std::move(fragment));
             }
         }
-    } else {
+    } else if (provider == EmoteProvider::SevenTV) {
         const auto set = root.contains(QStringLiteral("emote_set")) ? root.value(QStringLiteral("emote_set")).toObject() : root;
         for (const auto &value : set.value(QStringLiteral("emotes")).toArray()) {
             const auto item = value.toObject();
@@ -149,7 +113,18 @@ void EmoteCatalog::clear()
 
 void EmoteCatalog::replace(EmoteProvider provider, bool channel, QHash<QString, ChatFragment> emotes)
 {
-    catalogs_[static_cast<size_t>(provider) + (channel ? 3 : 0)] = std::move(emotes);
+    size_t bucket = 0;
+    switch (provider) {
+    case EmoteProvider::FrankerFaceZ: bucket = 0; break;
+    case EmoteProvider::BetterTTV: bucket = 1; break;
+    case EmoteProvider::SevenTV: bucket = 2; break;
+    default: return; // Native Twitch fragments never occupy third-party buckets.
+    }
+    for (auto &fragment : emotes) {
+        fragment.provider = provider;
+        fragment.sourceRange.reset(); // Catalog entries are not occurrences.
+    }
+    catalogs_[bucket + (channel ? 3 : 0)] = std::move(emotes);
 }
 
 void EmoteCatalog::apply(ChatMessage &message) const
@@ -158,14 +133,20 @@ void EmoteCatalog::apply(ChatMessage &message) const
         message.fragments = {{ChatFragment::Type::Text, message.text}};
     std::vector<ChatFragment> fragments;
     static const QRegularExpression tokens(QStringLiteral("\\s+|\\S+"), QRegularExpression::UseUnicodePropertiesOption);
+    qsizetype offset = 0;
     for (const auto &fragment : message.fragments) {
-        if (fragment.type != ChatFragment::Type::Text) {
+        const qsizetype fragmentOffset = offset;
+        offset += fragment.text.size();
+        if (fragment.type != ChatFragment::Type::Text || fragment.mention || fragment.cheermote) {
             fragments.push_back(fragment);
+            fragments.back().sourceRange = TextRange{fragmentOffset, fragment.text.size()};
             continue;
         }
         auto matches = tokens.globalMatch(fragment.text);
         while (matches.hasNext()) {
-            const QString token = matches.next().captured();
+            const auto match = matches.next();
+            const QString token = match.captured();
+            const TextRange range{fragmentOffset + match.capturedStart(), token.size()};
             const ChatFragment *emote = nullptr;
             for (auto it = catalogs_.rbegin(); it != catalogs_.rend(); ++it) {
                 const auto found = it->constFind(token);
@@ -174,12 +155,17 @@ void EmoteCatalog::apply(ChatMessage &message) const
                     break;
                 }
             }
-            if (emote)
+            if (emote) {
                 fragments.push_back(*emote);
-            else if (!fragments.empty() && fragments.back().type == ChatFragment::Type::Text)
+                fragments.back().sourceRange = range;
+            } else if (!fragments.empty() && fragments.back().type == ChatFragment::Type::Text &&
+                       !fragments.back().mention && !fragments.back().cheermote) {
                 fragments.back().text += token;
-            else
+                fragments.back().sourceRange->length += token.size();
+            } else {
                 fragments.push_back({ChatFragment::Type::Text, token});
+                fragments.back().sourceRange = range;
+            }
         }
     }
     message.fragments = std::move(fragments);

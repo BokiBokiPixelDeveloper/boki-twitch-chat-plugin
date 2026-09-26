@@ -13,9 +13,6 @@ EmoteService::EmoteService(MessageCallback callback, QNetworkAccessManager *tran
 EmoteService::~EmoteService()
 {
     clear();
-    const auto replies = transport_->findChildren<QNetworkReply *>();
-    for (auto *reply : replies)
-        QObject::disconnect(reply, nullptr, this, nullptr);
 }
 
 void EmoteService::clear()
@@ -28,9 +25,13 @@ void EmoteService::clear()
     channelId_.clear();
     loading_ = 0;
     initialLoad_ = false;
-    const auto replies = network_.findChildren<QNetworkReply *>();
-    for (auto *reply : replies)
+    const auto replies = std::exchange(replies_, {});
+    for (auto *reply : replies) {
+        QObject::disconnect(reply, nullptr, this, nullptr);
         reply->abort();
+        reply->deleteLater();
+    }
+    images_.clear();
 }
 
 void EmoteService::setChannel(const QString &twitchId)
@@ -65,6 +66,8 @@ void EmoteService::fetchCatalog(EmoteProvider provider, bool channel, const QUrl
     QNetworkRequest request(url);
     request.setTransferTimeout(5000);
     auto *reply = transport_->get(request);
+    reply->setParent(this); // Cancel deferred reply/timer work with this owner.
+    replies_.insert(reply);
     auto bytes = std::make_shared<QByteArray>();
     QObject::connect(reply, &QNetworkReply::readyRead, this, [reply, bytes]() {
         constexpr qint64 maxBytes = 8 * 1024 * 1024;
@@ -75,6 +78,7 @@ void EmoteService::fetchCatalog(EmoteProvider provider, bool channel, const QUrl
     });
     QTimer::singleShot(6000, reply, [reply]() { if (reply->isRunning()) reply->abort(); });
     QObject::connect(reply, &QNetworkReply::finished, this, [this, reply, bytes, provider, channel, generation]() {
+        replies_.remove(reply);
         reply->deleteLater();
         if (generation != generation_)
             return;
@@ -101,14 +105,21 @@ void EmoteService::fetchCatalog(EmoteProvider provider, bool channel, const QUrl
 
 void EmoteService::resolve(ChatMessage message)
 {
+    resolve(std::move(message), callback_);
+}
+
+void EmoteService::resolve(ChatMessage message, MessageCallback completion)
+{
     if (pending_.size() >= 64) {
         const auto oldest = pending_.front();
         pending_.pop_front();
         oldest->delivered = true;
-        callback_(std::move(oldest->message));
+        if (oldest->completion)
+            oldest->completion(std::move(oldest->message));
     }
     auto pending = std::make_shared<Pending>();
     pending->message = std::move(message);
+    pending->completion = std::move(completion);
     pending_.push_back(pending);
     flushTimer_.start();
     if (!initialLoad_)
@@ -148,6 +159,20 @@ void EmoteService::start(const std::shared_ptr<Pending> &pending)
                 complete(std::move(image));
         });
     }
+    for (size_t i = 0; i < pending->message.media.size(); ++i) {
+        if (pending->message.media[i].imageUrl.isEmpty())
+            continue;
+        ++pending->remaining;
+        images_.request(pending->message.media[i].imageUrl, [this, weak, i](ImageAsset image) {
+            const auto job = weak.lock();
+            if (!job || job->delivered)
+                return;
+            job->message.media[i].image = std::move(image);
+            --job->remaining;
+            if (!job->assembling)
+                flush();
+        });
+    }
     pending->assembling = false;
 }
 
@@ -159,7 +184,8 @@ void EmoteService::flush()
             break;
         pending_.pop_front();
         job->delivered = true;
-        callback_(std::move(job->message));
+        if (job->completion)
+            job->completion(std::move(job->message));
     }
     if (pending_.empty())
         flushTimer_.stop();

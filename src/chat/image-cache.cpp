@@ -136,9 +136,22 @@ ImageCache::ImageCache(QNetworkAccessManager *transport) : transport_(transport 
 
 ImageCache::~ImageCache()
 {
-    const auto replies = transport_->findChildren<QNetworkReply *>();
-    for (auto *reply : replies)
+    clear();
+}
+
+void ImageCache::clear()
+{
+    const auto replies = std::exchange(replies_, {});
+    for (auto *reply : replies) {
         QObject::disconnect(reply, nullptr, this, nullptr);
+        reply->abort();
+        reply->deleteLater();
+    }
+    waiting_.clear();
+    queued_.clear();
+    cache_.clear();
+    failures_.clear();
+    active_ = 0;
 }
 
 void ImageCache::request(const QUrl &url, Callback callback)
@@ -181,6 +194,8 @@ void ImageCache::pump()
         request.setTransferTimeout(5000);
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
         auto *reply = transport_->get(request); // never attach Twitch credentials to image requests
+        reply->setParent(this); // Cancel deferred reply/timer work with this owner.
+        replies_.insert(reply);
         auto bytes = std::make_shared<QByteArray>();
         QObject::connect(reply, &QNetworkReply::readyRead, this, [reply, bytes]() {
             if (reply->bytesAvailable() > maxDownloadBytes - bytes->size())
@@ -190,6 +205,7 @@ void ImageCache::pump()
         });
         QTimer::singleShot(6000, reply, [reply]() { if (reply->isRunning()) reply->abort(); });
         QObject::connect(reply, &QNetworkReply::finished, this, [this, reply, bytes, key = url.toString()]() {
+            replies_.remove(reply);
             ImageAsset asset;
             if (reply->error() == QNetworkReply::NoError &&
                 reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200) {

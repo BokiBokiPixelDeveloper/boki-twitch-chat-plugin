@@ -1,5 +1,56 @@
 # Tests
 
+## Event foundation
+
+`event-dispatcher-tests` checks all ten payload types reaching independent
+consumers, filtering, FIFO publication (not timestamp sorting), no replay,
+unsubscribe/destruction/move behavior, count/byte overflow including decoded
+assets, dispatcher destruction before subscribers, idempotent shutdown, rejected
+cross-thread publication, reentrant event deletion outside locks, and concurrent
+publication/registration/draining/close/shutdown.
+
+`event-normalizer-tests` uses synthetic envelopes for all payloads, both clear
+scopes, shared-chat subscription variants, anonymous users, gifts/Prime/months,
+community IDs, structured badges/emotes/mentions/cheermotes, UTC timestamps,
+invalid IDs/counts/payloads/envelopes, ignored controls/types/versions, and delivery
+of each normalized variant through two dispatcher consumers. It performs no HTTP
+requests and needs neither OBS nor credentials.
+
+`chat-tests` additionally verifies provider identity, UTF-16 occurrence ranges,
+safe provider bucket mapping, preservation of mentions/cheermotes during catalog
+expansion, and the existing legacy media/text fallback behavior.
+
+Run all suites with the normal configure/build/CTest commands below. For targeted
+Linux ASan/UBSan validation in a separate build directory:
+
+```bash
+cmake -S . -B build/event-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_TESTS=ON \
+  -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wextra -Wpedantic'
+cmake --build build/event-asan --target chat-tests event-dispatcher-tests event-normalizer-tests
+ctest --test-dir build/event-asan -R '^(chat|event-dispatcher|event-normalizer)-tests$' --output-on-failure
+```
+
+LeakSanitizer cannot run in some ptrace-based sandboxes; only there, use
+`ASAN_OPTIONS=detect_leaks=0` and report that leak checking was excluded. A separate
+`-fsanitize=thread` build can exercise the dispatcher concurrency cases. System Qt
+libraries may be uninstrumented; report any QtTest watchdog diagnostics separately
+and do not describe that run as a clean TSan result. Never suppress project race
+reports to make a run pass.
+
+`twitch-producer-tests` feeds synthetic EventSub fixtures through the production
+`TwitchClient` using fake HTTP and WebSocket transports. It covers all ten events,
+Unicode, badges, Twitch/7TV/BTTV/FFZ enrichment, anonymous and missing optional data,
+subscription scope conditions, failed/transient subscriptions, duplicate transport
+IDs, reconnect handoff, cancellation, queue pressure/deadlines, token refresh,
+shared runtime consumers/configuration conflicts, native moderation/media, and
+shutdown requested from another thread. No real credentials or network are used.
+The fixture IDs and tokens are synthetic. No dedicated XSS suite is included.
+
+See [the integration report](../docs/TWITCH_PRODUCER_INTEGRATION.md) for exact
+validation results and remaining real OBS/Twitch checks. Tests exercise runtime
+and adapter lifetimes without loading OBS; actual GPU/source teardown still needs
+manual validation on supported platforms.
+
 Windows uses the same chat/update-checker suites, plus a native post-exit suite:
 
     ./scripts/bootstrap-windows.ps1
