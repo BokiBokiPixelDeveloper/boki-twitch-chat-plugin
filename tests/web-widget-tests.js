@@ -17,7 +17,7 @@ class Element {
     this.tagName = tagName.toUpperCase();
     this.children = [];
     this.parent = null;
-    this.style = {};
+    Object.defineProperty(this, 'style', {get() { throw new Error('Inline styles violate widget CSP'); }});
     this.created = created;
     this._text = '';
     created.push(this);
@@ -179,4 +179,13 @@ test('two widget contexts retain independent DOM state', () => {
 test('widget source contains no executable HTML sinks or string timers', () => {
   for (const sink of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', 'eval(', 'new Function', 'setTimeout(', 'setInterval('])
     assert.equal(widgetSource.includes(sink), false, sink);
+});
+
+test('username colors use only fixed external stylesheet classes', () => {
+  const widget = createWidget();
+  widget.emit(chatEvent('color', user('u', 'Colored'), [{type: 'text', text: 'hello'}]));
+  assert.match(widget.created.find(element => element.className?.startsWith('name')).className, /^name name-color-[0-7]$/);
+  const malicious = {...user('u2', 'Plain'), color: 'red; background:url(https://example.com)'};
+  widget.emit(chatEvent('invalid-color', malicious, []));
+  assert.equal(widget.created.filter(element => element.className?.startsWith('name')).at(-1).className, 'name');
 });

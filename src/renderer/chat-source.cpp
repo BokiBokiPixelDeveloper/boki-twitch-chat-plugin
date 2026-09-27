@@ -2,11 +2,8 @@
 
 #include <QFont>
 #include <QFontDatabase>
-#include <QCoreApplication>
 #include <QMutexLocker>
 #include <QPainter>
-#include <QTimer>
-#include <QThread>
 
 #include <graphics/graphics.h>
 #include <obs-module.h>
@@ -227,33 +224,24 @@ void ChatSource::refreshWebWidget()
 {
     std::lock_guard lock(sourceMutex_);
     if (rendererMode_ != RendererMode::WebWidget) return;
+    blog(LOG_INFO, "[WebWidget][Runtime] Refresh requested");
     destroyWebRuntime();
+    blog(LOG_INFO, "[WebWidget][Runtime] Previous runtime stopped");
     createWebRuntime();
+    blog(LOG_INFO, "[WebWidget][Runtime] Runtime recreated");
     if (source_) obs_source_update_properties(source_);
 }
 
 void ChatSource::createWebRuntime()
 {
-    auto create = [this] {
-        webRuntime_ = std::make_unique<WebWidgetRuntime>(source_, runtime_, backendAccepted_, canvasWidth_, canvasHeight_);
-    };
-    auto *app = QCoreApplication::instance();
-    if (app && QThread::currentThread() != app->thread())
-        QMetaObject::invokeMethod(app, std::move(create), Qt::BlockingQueuedConnection);
-    else
-        create();
+    webRuntime_ = std::make_unique<WebWidgetRuntime>(source_, runtime_, backendAccepted_, canvasWidth_, canvasHeight_);
 }
 
 void ChatSource::destroyWebRuntime()
 {
-    auto *retired = webRuntime_.release();
-    if (!retired) return;
-    auto destroy = [retired] { delete retired; };
-    auto *app = QCoreApplication::instance();
-    if (app && QThread::currentThread() != app->thread() && !QCoreApplication::closingDown())
-        QMetaObject::invokeMethod(app, std::move(destroy), Qt::BlockingQueuedConnection);
-    else
-        destroy();
+    // Move ownership first: OBS active-child callbacks may reenter enumeration.
+    auto retired = std::move(webRuntime_);
+    retired.reset();
 }
 
 obs_source_t *ChatSource::webChild() const

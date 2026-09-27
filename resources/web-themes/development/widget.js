@@ -63,7 +63,16 @@
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = data.user.displayName;
-    if (data.user.color) name.style.color = data.user.color;
+    // Map validated Twitch colors to external CSS classes under style-src 'self'.
+    if (/^#[0-9a-f]{6}$/i.test(data.user.color || '')) {
+      const value = parseInt(data.user.color.slice(1), 16);
+      const rgb = [value >> 16, (value >> 8) & 255, value & 255];
+      const palette = [[255,128,128], [255,192,128], [255,255,128], [128,255,128],
+                       [128,255,255], [128,160,255], [192,128,255], [255,128,192]];
+      const distance = color => color.reduce((sum, channel, i) => sum + (channel - rgb[i]) ** 2, 0);
+      const closest = palette.reduce((best, color, i) => distance(color) < distance(palette[best]) ? i : best, 0);
+      name.className += ` name-color-${closest}`;
+    }
     row.append(name);
     appendFragments(row, data.fragments);
     appendMedia(row, data.media);

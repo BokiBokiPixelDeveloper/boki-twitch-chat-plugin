@@ -196,3 +196,24 @@ Runtime stubs let these cases run offline without launching OBS. A real
 `bash install.sh --check` and an OBS launch on each supported distribution remain
 necessary to validate release compatibility. Tests never install into a real user
 profile or stop a running OBS process.
+
+## Web runtime lifecycle regression
+
+On Linux, `web-runtime-tests` links the production Web Widget runtime with linker
+wrappers for the OBS browser boundary. It uses real Qt HTTP/WebSocket servers and
+clients. Loopback socket access is required; network-restricted sandboxes cannot
+run this suite successfully. No OBS GUI or Twitch credentials are needed.
+
+Coverage includes repeated creation/refresh/shutdown, source-thread destruction
+while the application thread joins without pumping events, queued resize, a live
+WebSocket, a partial HTTP request, event publication during teardown, another
+consumer surviving teardown, missing browser/creation/attachment failures, and
+exactly-once detach/release/server-stop diagnostics. The tests emulate runtime
+replacement; actual ChatSource mode switching and CEF rendering need the OBS
+checklist in `docs/WEB_WIDGET_LIFECYCLE_FIX.md`.
+
+Build `web-runtime-tests web-event-tests synthetic-event-tests event-dispatcher-tests`
+in the ASan/UBSan configuration above, then select those suites with CTest.
+`web-widget-tests` rejects inline DOM styling and validates fixed username color
+classes. The existing dispatcher suite covers publication racing subscription
+closure and verifies no delivery after closure.
