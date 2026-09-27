@@ -5,7 +5,7 @@
 #include "renderer/renderer-mode.hpp"
 #include "web/web-widget-runtime.hpp"
 #include <mutex>
-#include "updater/update-checker.hpp"
+#include "updater/update-ui.hpp"
 
 #include <QMutex>
 #include <QString>
@@ -63,7 +63,7 @@ private:
     std::shared_ptr<BackendAttachment> backend_;
     std::shared_ptr<NativeEventAdapter> adapter_ = std::make_shared<NativeEventAdapter>();
     std::shared_ptr<std::atomic_bool> backendAccepted_ = std::make_shared<std::atomic_bool>(false);
-    std::unique_ptr<UpdateChecker> updater_;
+    std::unique_ptr<UpdateUi> updater_;
     std::unique_ptr<WebWidgetRuntime> webRuntime_;
     RendererMode rendererMode_ = RendererMode::Native;
 

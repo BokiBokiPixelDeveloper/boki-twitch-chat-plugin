@@ -60,6 +60,23 @@ private Q_SLOTS:
         QCOMPARE(parsed.value("data").toObject().value("text").toString(), hostile);
         QVERIFY(!encoded.contains("innerHTML"));
     }
+    void subscriptionMessagesSurviveSerialization()
+    {
+        const SubscriptionTerms subscriptionTerms{SubscriptionTier::Tier1, false, 3};
+        const QString subscriptionText = QStringLiteral("My first subscription! <b>still text</b>");
+        const QString resubscriptionText = QStringLiteral("Glad to be back for another month 👋");
+        const auto subscriptionData = WebEventSerializer::serialize(
+            makeEvent(Subscription{message(subscriptionText), subscriptionTerms})).value("data").toObject();
+        const auto resubscriptionData = WebEventSerializer::serialize(
+            makeEvent(Resubscription{message(resubscriptionText), subscriptionTerms, 12, 4, false, {}}))
+            .value("data").toObject();
+        QCOMPARE(subscriptionData.value("notice").toObject().value("text").toString(), subscriptionText);
+        QCOMPARE(subscriptionData.value("notice").toObject().value("fragments").toArray().at(0).toObject()
+                     .value("text").toString(), subscriptionText);
+        QCOMPARE(resubscriptionData.value("notice").toObject().value("text").toString(), resubscriptionText);
+        QCOMPARE(resubscriptionData.value("notice").toObject().value("fragments").toArray().at(0).toObject()
+                     .value("text").toString(), resubscriptionText);
+    }
     void embeddedNullAndControlsStayJsonData()
     {
         QString value = QStringLiteral("prefix");
@@ -79,6 +96,17 @@ private Q_SLOTS:
         QCOMPARE(fragments.at(1).toObject().value("provider").toString(), QStringLiteral("twitch"));
         QCOMPARE(data.value("badges").toArray().at(0).toObject().value("type").toString(), QStringLiteral("moderator"));
         QVERIFY(data.value("badges").toArray().at(0).toObject().value("imageUrl").isNull());
+    }
+    void serializesValidatedBadgeAndMediaUrls()
+    {
+        auto value = message(QStringLiteral("[legacy GIF]"));
+        value.badges.at(0).imageUrl = QUrl(QStringLiteral("https://static-cdn.jtvnw.net/badges/v1/id/3"));
+        value.media = {{QUrl(QStringLiteral("https://static-cdn.jtvnw.net/legacy.gif")), {}}};
+        const auto data = WebEventSerializer::serialize(makeEvent(value)).value("data").toObject();
+        QCOMPARE(data.value("badges").toArray().at(0).toObject().value("imageUrl").toString(),
+                 QStringLiteral("https://static-cdn.jtvnw.net/badges/v1/id/3"));
+        QCOMPARE(data.value("media").toArray().at(0).toObject().value("imageUrl").toString(),
+                 QStringLiteral("https://static-cdn.jtvnw.net/legacy.gif"));
     }
     void independentSubscriptionsAndDestruction()
     {
