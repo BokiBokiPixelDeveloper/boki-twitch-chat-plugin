@@ -98,3 +98,18 @@ if(WIN32)
 else()
     set_tests_properties(twitch-producer-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 45)
 endif()
+
+# Wrap only the OBS boundary; exercise real Qt sockets, threads and runtime teardown.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(web-runtime-tests web-runtime-tests.cpp ../src/web/web-widget-runtime.cpp
+        ../resources/web-widget.qrc)
+    set_target_properties(web-runtime-tests PROPERTIES AUTOMOC ON AUTORCC ON)
+    target_link_libraries(web-runtime-tests PRIVATE web-event-support twitch-backend Qt6::Test OBS::libobs)
+    foreach(symbol obs_get_module obs_enum_source_types obs_source_create_private obs_source_set_muted
+                   obs_source_add_active_child obs_source_remove_active_child obs_source_release
+                   obs_source_video_render obs_source_get_settings obs_source_update blog)
+        target_link_options(web-runtime-tests PRIVATE "LINKER:--wrap=${symbol}")
+    endforeach()
+    add_test(NAME web-runtime-tests COMMAND web-runtime-tests)
+    set_tests_properties(web-runtime-tests PROPERTIES TIMEOUT 30)
+endif()

@@ -10,3 +10,13 @@ body { margin: 0; min-height: 100vh; color: #fff; background: transparent; overf
 .media { display: block; max-width: min(20rem, 100%); max-height: 12rem; margin-top: .25rem; object-fit: contain; }
 .name { margin-right: .35rem; font-weight: 700; }
 .event { border-left: .3rem solid #9147ff; }
+
+/* CSP-compatible username palette. */
+.name-color-0 { color: #ff8080; }
+.name-color-1 { color: #ffc080; }
+.name-color-2 { color: #ffff80; }
+.name-color-3 { color: #80ff80; }
+.name-color-4 { color: #80ffff; }
+.name-color-5 { color: #80a0ff; }
+.name-color-6 { color: #c080ff; }
+.name-color-7 { color: #ff80c0; }
