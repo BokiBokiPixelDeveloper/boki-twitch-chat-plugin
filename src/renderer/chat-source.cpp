@@ -2,9 +2,11 @@
 
 #include <QFont>
 #include <QFontDatabase>
+#include <QCoreApplication>
 #include <QMutexLocker>
 #include <QPainter>
 #include <QTimer>
+#include <QThread>
 
 #include <graphics/graphics.h>
 #include <obs-module.h>
@@ -14,6 +16,7 @@
 
 namespace {
 constexpr const char *S_CLIENT_ID = "client_id";
+constexpr const char *S_RENDERER_MODE = "renderer_mode";
 constexpr const char *S_CHANNEL = "channel";
 constexpr const char *S_ACCESS_TOKEN = "access_token";
 constexpr const char *S_REFRESH_TOKEN = "refresh_token";
@@ -93,6 +96,11 @@ bool buttonInstallUpdate(obs_properties_t *, obs_property_t *, void *data)
     static_cast<ChatSource *>(data)->installUpdate();
     return true;
 }
+bool buttonRefreshWebWidget(obs_properties_t *, obs_property_t *, void *data)
+{
+    static_cast<ChatSource *>(data)->refreshWebWidget();
+    return true;
+}
 } // namespace
 
 ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source, std::shared_ptr<PluginRuntime> runtime)
@@ -100,7 +108,8 @@ ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source, std::shared_p
 {
     // Promotion protects OBS source lifetime; queued delivery never captures this.
     const auto weakSource = std::shared_ptr<obs_weak_source_t>(obs_source_get_weak_source(source), obs_weak_source_release);
-    backend_ = runtime_->attach([adapter = adapter_, weakSource, previousStatus = std::make_shared<QString>()](BackendAttachment::Delivery delivery) {
+    backend_ = runtime_->attach([adapter = adapter_, accepted = backendAccepted_, weakSource, previousStatus = std::make_shared<QString>()](BackendAttachment::Delivery delivery) {
+        accepted->store(delivery.accepted);
         const bool statusChanged = delivery.status != *previousStatus;
         *previousStatus = delivery.status;
         if (delivery.tokens || statusChanged) {
@@ -139,6 +148,7 @@ ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source, std::shared_p
 
 ChatSource::~ChatSource()
 {
+    destroyWebRuntime();
     updater_.reset(); // Invalidate queued updater UI notifications before source teardown.
     adapter_->close();
     backend_->close();
@@ -159,8 +169,9 @@ ChatSource::~ChatSource()
 void ChatSource::update(obs_data_t *settings)
 {
     std::lock_guard lock(sourceMutex_);
-    canvasWidth_ = static_cast<uint32_t>(obs_data_get_int(settings, S_CANVAS_W));
-    canvasHeight_ = static_cast<uint32_t>(obs_data_get_int(settings, S_CANVAS_H));
+    const auto requestedMode = rendererModeFromSetting(QString::fromUtf8(obs_data_get_string(settings, S_RENDERER_MODE)));
+    canvasWidth_ = static_cast<uint32_t>(std::clamp<int64_t>(obs_data_get_int(settings, S_CANVAS_W), 64, 7680));
+    canvasHeight_ = static_cast<uint32_t>(std::clamp<int64_t>(obs_data_get_int(settings, S_CANVAS_H), 64, 4320));
     laneCount_ = static_cast<int>(obs_data_get_int(settings, S_LANES));
     laneJitter_ = static_cast<int>(obs_data_get_int(settings, S_JITTER));
     fontFamily_ = QString::fromUtf8(obs_data_get_string(settings, S_FONT_FAMILY));
@@ -188,8 +199,10 @@ void ChatSource::update(obs_data_t *settings)
     eventTestValues_.giftCount = static_cast<int>(obs_data_get_int(settings, S_TEST_GIFT_COUNT));
     eventTestValues_.resubMonths = static_cast<int>(obs_data_get_int(settings, S_TEST_RESUB_MONTHS));
 
-    canvasWidth_ = std::clamp<uint32_t>(canvasWidth_, 320, 7680);
-    canvasHeight_ = std::clamp<uint32_t>(canvasHeight_, 240, 4320);
+    if (requestedMode == RendererMode::Native) {
+        canvasWidth_ = std::max<uint32_t>(canvasWidth_, 320);
+        canvasHeight_ = std::max<uint32_t>(canvasHeight_, 240);
+    }
     laneCount_ = std::clamp(laneCount_, 1, 20);
     fontWeight_ = std::clamp(fontWeight_, 100, 900);
     outlineWidthPx_ = std::clamp(outlineWidthPx_, 0.0f, 12.0f);
@@ -208,6 +221,55 @@ void ChatSource::update(obs_data_t *settings)
     adapter_->configure({fontFamily_, fontWeight_, outlineWidthPx_, minFontPx_, maxFontPx_, minSpeed_, maxSpeed_});
     backend_->configure({clientId_, channel_, accessToken_, refreshToken_});
     backend_->setEventTestEnabled(eventTestEnabled_);
+    if (requestedMode != rendererMode_) {
+        destroyWebRuntime();
+        rendererMode_ = requestedMode;
+        backend_->setEventDeliveryEnabled(rendererMode_ == RendererMode::Native);
+        if (rendererMode_ == RendererMode::WebWidget)
+            createWebRuntime();
+    } else if (rendererMode_ == RendererMode::WebWidget) {
+        if (!webRuntime_) createWebRuntime();
+        else webRuntime_->resize(canvasWidth_, canvasHeight_);
+    }
+}
+
+void ChatSource::refreshWebWidget()
+{
+    std::lock_guard lock(sourceMutex_);
+    if (rendererMode_ != RendererMode::WebWidget) return;
+    destroyWebRuntime();
+    createWebRuntime();
+    if (source_) obs_source_update_properties(source_);
+}
+
+void ChatSource::createWebRuntime()
+{
+    auto create = [this] {
+        webRuntime_ = std::make_unique<WebWidgetRuntime>(source_, runtime_, backendAccepted_, canvasWidth_, canvasHeight_);
+    };
+    auto *app = QCoreApplication::instance();
+    if (app && QThread::currentThread() != app->thread())
+        QMetaObject::invokeMethod(app, std::move(create), Qt::BlockingQueuedConnection);
+    else
+        create();
+}
+
+void ChatSource::destroyWebRuntime()
+{
+    auto *retired = webRuntime_.release();
+    if (!retired) return;
+    auto destroy = [retired] { delete retired; };
+    auto *app = QCoreApplication::instance();
+    if (app && QThread::currentThread() != app->thread() && !QCoreApplication::closingDown())
+        QMetaObject::invokeMethod(app, std::move(destroy), Qt::BlockingQueuedConnection);
+    else
+        destroy();
+}
+
+obs_source_t *ChatSource::webChild() const
+{
+    std::lock_guard lock(sourceMutex_);
+    return webRuntime_ && webRuntime_->child() ? obs_source_get_ref(webRuntime_->child()) : nullptr;
 }
 
 void ChatSource::setEventTestEnabled(bool enabled)
@@ -467,6 +529,7 @@ void ChatSource::consumePending()
 void ChatSource::tick(float seconds)
 {
     std::lock_guard lock(sourceMutex_);
+    if (rendererMode_ == RendererMode::WebWidget) return;
     consumePending();
 
     // Native OBS timing: no browser clock and no catch-up clamp. Speed remains true px/s.
@@ -542,6 +605,10 @@ void ChatSource::destroyTexture(void *&texture)
 void ChatSource::render()
 {
     std::lock_guard lock(sourceMutex_);
+    if (rendererMode_ == RendererMode::WebWidget) {
+        if (webRuntime_) webRuntime_->render();
+        return;
+    }
     for (void *texture : deferredDestroy_) {
         if (texture)
             gs_texture_destroy(static_cast<gs_texture_t *>(texture));
@@ -624,6 +691,16 @@ obs_properties_t *ChatSource::properties()
     std::lock_guard lock(sourceMutex_);
     obs_properties_t *props = obs_properties_create();
 
+    auto *mode = obs_properties_add_list(props, S_RENDERER_MODE, "Renderer Mode",
+                                         OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+    obs_property_list_add_string(mode, "Native", "native");
+    obs_property_list_add_string(mode, "Web Widget", "web_widget");
+    if (rendererMode_ == RendererMode::WebWidget) {
+        const QByteArray webStatus = (webRuntime_ ? webRuntime_->status() : QStringLiteral("Web Widget unavailable")).toUtf8();
+        obs_properties_add_text(props, "web_status_info", webStatus.constData(), OBS_TEXT_INFO);
+        obs_properties_add_button2(props, "web_refresh", "Refresh Web Widget", buttonRefreshWebWidget, this);
+    }
+
     obs_properties_t *twitch = obs_properties_create();
     obs_properties_add_text(twitch, S_CLIENT_ID, "Twitch Client ID", OBS_TEXT_DEFAULT);
     obs_properties_add_text(twitch, S_CHANNEL, "Channel (login name)", OBS_TEXT_DEFAULT);
@@ -633,8 +710,8 @@ obs_properties_t *ChatSource::properties()
     obs_properties_add_group(props, "twitch_group", "Twitch", OBS_GROUP_NORMAL, twitch);
 
     obs_properties_t *layout = obs_properties_create();
-    obs_properties_add_int(layout, S_CANVAS_W, "Width", 320, 7680, 1);
-    obs_properties_add_int(layout, S_CANVAS_H, "Height", 240, 4320, 1);
+    obs_properties_add_int(layout, S_CANVAS_W, "Width", rendererMode_ == RendererMode::WebWidget ? 64 : 320, 7680, 1);
+    obs_properties_add_int(layout, S_CANVAS_H, "Height", rendererMode_ == RendererMode::WebWidget ? 64 : 240, 4320, 1);
     obs_properties_add_int(layout, S_LANES, "Primary Lanes", 1, 20, 1);
     obs_properties_add_int_slider(layout, S_JITTER, "Y-Jitter (px)", 0, 150, 1);
 

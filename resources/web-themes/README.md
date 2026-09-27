@@ -1,7 +1,9 @@
 # Web themes
 
-This directory is reserved for optional HTML/CSS/JavaScript chat themes.
+This directory contains optional HTML/CSS/JavaScript chat widgets.
 
-The native OBS renderer remains the primary path for motion-sensitive overlays. Web themes are intended for customizable conventional chat layouts and should consume the future normalized localhost/WebSocket bridge rather than implementing Twitch authentication themselves.
+The bundled `development` widget consumes the normalized per-source loopback
+bridge. It renders all V3 event types and exists as a runtime validation widget.
+Widgets never implement Twitch authentication themselves.
 
 See `docs/ARCHITECTURE.md`.

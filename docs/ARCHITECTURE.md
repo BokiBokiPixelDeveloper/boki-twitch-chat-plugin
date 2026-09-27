@@ -102,7 +102,13 @@ Planned renderer:
 
 ## Web themes
 
-Web themes are intentionally a separate optional presentation path. A future local bridge can expose normalized messages to a browser theme over localhost/WebSocket. This keeps creator-authored HTML/CSS/JavaScript possible without forcing the native floating renderer back through CEF.
+The [V3 Web Widget Runtime plan](V3_WEB_WIDGET_RUNTIME_PLAN.md) defines the
+plugin-owned OBS browser integration, per-source lifecycle, generic event bridge
+and security boundaries implemented for `0.1.0-alpha.14`.
+
+Web themes are an optional presentation path. The Web Widget runtime exposes
+validated normalized events over an authenticated per-source loopback WebSocket.
+The native Floating renderer remains on the OBS graphics path.
 
 The initial theme resource location is:
 

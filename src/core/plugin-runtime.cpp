@@ -16,6 +16,8 @@ struct BackendAttachment::State {
     bool connect = false;
     bool configured = false;
     bool eventTestEnabled = false;
+    bool eventDeliveryEnabled = true;
+    bool hasSubscription = false;
     std::deque<std::pair<SyntheticEventKind, SyntheticEventValues>> syntheticRequests;
 };
 BackendAttachment::BackendAttachment(std::shared_ptr<State> state) : state_(std::move(state)) {}
@@ -36,6 +38,16 @@ void BackendAttachment::setEventTestEnabled(bool enabled)
     std::lock_guard lock(state_->mutex);
     state_->eventTestEnabled = enabled;
     if (!enabled) state_->syntheticRequests.clear();
+}
+void BackendAttachment::setEventDeliveryEnabled(bool enabled)
+{
+    std::lock_guard lock(state_->mutex);
+    if (state_->eventDeliveryEnabled == enabled) return;
+    state_->eventDeliveryEnabled = enabled;
+    if (!enabled) {
+        state_->subscription.close();
+        state_->hasSubscription = false;
+    }
 }
 void BackendAttachment::injectSyntheticEvent(SyntheticEventKind kind, SyntheticEventValues values)
 {
@@ -100,6 +112,7 @@ struct PluginRuntime::Service final : QObject {
         for (auto &weak : attachments) if (auto state = weak.lock()) {
             std::lock_guard lock(state->mutex);
             state->subscription.close();
+            state->hasSubscription = false;
             state->accepted = false;
         }
         current = config;
@@ -175,7 +188,7 @@ struct PluginRuntime::Service final : QObject {
                 const bool compatible = selected && matches(state->configuration);
                 if (!compatible) {
                     delivery.reset = state->accepted;
-                    state->subscription.close(); state->accepted = false;
+                    state->subscription.close(); state->hasSubscription = false; state->accepted = false;
                     state->status = selected ? QStringLiteral("Shared backend uses another channel or account; saved settings are unchanged")
                                              : QStringLiteral("Set a Twitch client ID and channel");
                     state->connect = false;
@@ -183,14 +196,19 @@ struct PluginRuntime::Service final : QObject {
                 } else {
                     ++accepted;
                     if (!state->accepted) {
-                        state->subscription = dispatcher->subscribe();
                         state->accepted = true;
                         delivery.reset = true;
                     }
+                    if (state->eventDeliveryEnabled && !state->hasSubscription) {
+                        state->subscription = dispatcher->subscribe();
+                        state->hasSubscription = true;
+                        delivery.reset = true;
+                    }
                     state->status = client->status();
-                    delivery.batch = state->subscription.takeBatch(64);
+                    if (state->eventDeliveryEnabled) delivery.batch = state->subscription.takeBatch(64);
                     if (delivery.batch.state == ConsumerState::Overflowed) {
                         state->subscription = dispatcher->subscribe();
+                        state->hasSubscription = true;
                         state->status = QStringLiteral("Native consumer fell behind; resuming with new events");
                     }
                     if (!current.accessToken.isEmpty() && (tokensChanged || state->configured) &&
@@ -203,6 +221,7 @@ struct PluginRuntime::Service final : QObject {
                     state->configured = false;
                 }
                 delivery.status = state->status;
+                delivery.accepted = state->accepted;
                 consumer = state->consumer;
             }
             const QPointer<Service> guard(this);
