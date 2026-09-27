@@ -14,6 +14,7 @@ public:
         std::optional<TwitchTokens> tokens;
         TwitchConfiguration tokenSettings; // Expected saved settings before token replacement.
         bool reset = false;
+        bool accepted = false;
     };
     using Consumer = std::function<void(Delivery)>;
     ~BackendAttachment();
@@ -21,6 +22,7 @@ public:
     void connect();
     void close();
     void setEventTestEnabled(bool enabled);
+    void setEventDeliveryEnabled(bool enabled);
     void injectSyntheticEvent(SyntheticEventKind kind, SyntheticEventValues values = {});
     QString status() const;
 private:

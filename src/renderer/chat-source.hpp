@@ -2,6 +2,8 @@
 
 #include "renderer/render-types.hpp"
 #include "renderer/native-event-adapter.hpp"
+#include "renderer/renderer-mode.hpp"
+#include "web/web-widget-runtime.hpp"
 #include <mutex>
 #include "updater/update-checker.hpp"
 
@@ -35,10 +37,15 @@ public:
     void injectSyntheticEvent(SyntheticEventKind kind);
     void checkForUpdates();
     void installUpdate();
+    void refreshWebWidget();
+    obs_source_t *webChild() const;
+    obs_source_t *source() const { return source_; }
 
     QString status() const;
 
 private:
+    void createWebRuntime();
+    void destroyWebRuntime();
     void enqueueMessage(ChatMessage message);
     void enqueueGif(DecodedGif gif);
 
@@ -55,7 +62,10 @@ private:
     std::shared_ptr<PluginRuntime> runtime_;
     std::shared_ptr<BackendAttachment> backend_;
     std::shared_ptr<NativeEventAdapter> adapter_ = std::make_shared<NativeEventAdapter>();
+    std::shared_ptr<std::atomic_bool> backendAccepted_ = std::make_shared<std::atomic_bool>(false);
     std::unique_ptr<UpdateChecker> updater_;
+    std::unique_ptr<WebWidgetRuntime> webRuntime_;
+    RendererMode rendererMode_ = RendererMode::Native;
 
 
     std::vector<RenderMessage> messages_;

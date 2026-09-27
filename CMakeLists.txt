@@ -69,6 +69,10 @@ target_link_libraries(twitch-backend PUBLIC twitch-support chat-support Qt6::Web
 add_library(native-event-adapter STATIC src/renderer/native-event-adapter.cpp)
 target_link_libraries(native-event-adapter PUBLIC twitch-backend)
 
+add_library(web-event-support STATIC src/web/web-event-serializer.cpp src/web/widget-resource-request.cpp)
+target_include_directories(web-event-support PUBLIC src)
+target_link_libraries(web-event-support PUBLIC event-core Qt6::Core)
+
 if(WIN32)
     set(UPDATER_PLATFORM src/updater/post-exit-windows.cpp)
 else()
@@ -90,14 +94,17 @@ add_library(${PROJECT_NAME} MODULE)
 target_sources(${PROJECT_NAME} PRIVATE
     src/plugin-main.cpp
     src/renderer/chat-source.cpp
+    src/web/web-widget-runtime.cpp
     src/updater/update-checker.cpp
     ${CHAT_EMOJI_RESOURCE}
+    resources/web-widget.qrc
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE src)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     native-event-adapter
+    web-event-support
     post-exit-support
     OBS::libobs
     Qt6::Core

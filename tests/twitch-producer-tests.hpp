@@ -14,6 +14,7 @@ private Q_SLOTS:
     void transientSubscriptionRetryAndStop();
     void delayedEnrichmentOrderingAndCancellation();
     void sharedRuntimeAndDetachedConsumers();
+    void attachmentEventDeliveryCanSwitchModes();
     void runtimeTokensAndQueuedDetach();
     void refreshBoundedAndFormEncoding();
     void nativeAdapterModerationAndLifetime();

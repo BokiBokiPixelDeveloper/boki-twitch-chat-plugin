@@ -1,0 +1,7 @@
+<RCC><qresource prefix="/bokis-web-widget">
+  <file alias="index.html">web-themes/development/index.html</file>
+  <file alias="style.css">web-themes/development/style.css</file>
+  <file alias="bridge.js">web-themes/development/bridge.js</file>
+  <file alias="widget.js">web-themes/development/widget.js</file>
+  <file alias="README.md">web-themes/development/README.md</file>
+</qresource></RCC>

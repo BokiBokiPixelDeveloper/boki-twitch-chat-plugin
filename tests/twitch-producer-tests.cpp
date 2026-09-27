@@ -396,6 +396,39 @@ void TwitchProducerTests::sharedRuntimeAndDetachedConsumers()
     QCOMPARE(late->status(), QStringLiteral("Runtime stopped"));
 }
 
+void TwitchProducerTests::attachmentEventDeliveryCanSwitchModes()
+{
+    Harness h;
+    PluginRuntime runtime(h.dependencies());
+    std::vector<EventPtr> received;
+    bool accepted = false;
+    auto source = runtime.attach([&](BackendAttachment::Delivery delivery) {
+        accepted = delivery.accepted;
+        received.insert(received.end(), delivery.batch.events.begin(), delivery.batch.events.end());
+    });
+    source->setEventDeliveryEnabled(false);
+    source->configure(configuration());
+    QTRY_COMPARE(h.sockets.size(), 1);
+    h.sockets[0]->deliver(welcome());
+    QTRY_VERIFY(accepted);
+    h.sockets[0]->deliver(eventAt(4, QStringLiteral("web-mode")));
+    QTest::qWait(60);
+    QVERIFY(received.empty());
+
+    source->setEventDeliveryEnabled(true);
+    QTest::qWait(60);
+    h.sockets[0]->deliver(eventAt(4, QStringLiteral("native-mode")));
+    QTRY_COMPARE(received.size(), size_t(1));
+    QCOMPARE(received.front()->header.eventId, QStringLiteral("native-mode"));
+
+    source->setEventDeliveryEnabled(false);
+    h.sockets[0]->deliver(eventAt(4, QStringLiteral("web-mode-again")));
+    QTest::qWait(60);
+    QCOMPARE(received.size(), size_t(1));
+    QCOMPARE(h.sockets.size(), 1);
+    runtime.shutdown();
+}
+
 void TwitchProducerTests::runtimeTokensAndQueuedDetach()
 {
     Harness h; PluginRuntime runtime(h.dependencies(), [&](QString log) { h.logs.push_back(log); });

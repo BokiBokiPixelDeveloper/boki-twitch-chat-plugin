@@ -26,6 +26,19 @@ target_link_libraries(synthetic-event-tests PRIVATE twitch-backend Qt6::Test)
 add_test(NAME synthetic-event-tests COMMAND synthetic-event-tests)
 set_tests_properties(synthetic-event-tests PROPERTIES TIMEOUT 30)
 
+add_executable(web-event-tests web-event-tests.cpp)
+set_target_properties(web-event-tests PROPERTIES AUTOMOC ON)
+target_link_libraries(web-event-tests PRIVATE web-event-support twitch-backend Qt6::Test)
+add_test(NAME web-event-tests COMMAND web-event-tests)
+set_tests_properties(web-event-tests PROPERTIES TIMEOUT 30)
+
+find_program(NODE_EXECUTABLE node)
+if(NODE_EXECUTABLE)
+    add_test(NAME web-widget-tests COMMAND ${NODE_EXECUTABLE} --test
+        ${CMAKE_CURRENT_SOURCE_DIR}/web-widget-tests.js)
+    set_tests_properties(web-widget-tests PROPERTIES TIMEOUT 30)
+endif()
+
 add_executable(updater-tests updater-tests.cpp ../src/updater/update-checker.cpp)
 set_target_properties(updater-tests PROPERTIES AUTOMOC ON)
 target_include_directories(updater-tests PRIVATE ../src $<TARGET_PROPERTY:OBS::libobs,INTERFACE_INCLUDE_DIRECTORIES>)

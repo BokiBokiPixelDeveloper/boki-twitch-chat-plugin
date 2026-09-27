@@ -27,7 +27,20 @@ See `docs/ARCHITECTURE.md` for the multi-renderer direction.
 
 - **Floating** — current native right-to-left mode with lanes, dynamic speed/size and free-moving GIFs.
 - **Classic vertical** — conventional stacked chat that moves upward.
-- **Web themes** — optional HTML/CSS/JavaScript themes fed by a future local message bridge.
+- **Web Widget** — a plugin-owned OBS browser runtime fed by the validated local event bridge.
+
+## Development Web Widget
+
+Select **Web Widget** under **Renderer Mode** in the source properties. Set
+**Width** and **Height** for the desired vertical, horizontal, or square overlay;
+the bundled widget uses a transparent responsive layout.
+
+For visual testing, enable **Event Test Mode** and use the existing Chat, Delete,
+Clear, Follow, Subscription, Resubscription, Gift, Community Gift, Cheer, and
+Raid buttons. These events use the normal synthetic producer, validation,
+dispatcher, Web bridge, and widget path. **Refresh Web Widget** creates a clean
+private browser runtime. This widget is a development/reference surface and does
+not implement StreamElements APIs or widget imports.
 
 Twitch connectivity and normalized message data should be shared across all modes.
 

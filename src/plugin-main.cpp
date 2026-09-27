@@ -9,7 +9,7 @@ OBS_MODULE_AUTHOR("OpenAI / Boki")
 
 MODULE_EXPORT const char *obs_module_description(void)
 {
-    return "Native Twitch chat renderer (no CEF/browser source)";
+    return "Twitch chat renderer with Native and Web Widget modes";
 }
 
 static std::shared_ptr<PluginRuntime> runtime;
@@ -59,6 +59,15 @@ static obs_properties_t *sourceProperties(void *data)
     return data ? static_cast<ChatSource *>(data)->properties() : obs_properties_create();
 }
 
+static void sourceEnumActive(void *data, obs_source_enum_proc_t callback, void *param)
+{
+    auto *chat = static_cast<ChatSource *>(data);
+    if (auto *child = chat->webChild()) {
+        callback(chat->source(), child, param);
+        obs_source_release(child);
+    }
+}
+
 static void sourceDefaults(obs_data_t *settings)
 {
     obs_data_set_default_int(settings, "canvas_width", 1920);
@@ -85,6 +94,7 @@ static void sourceDefaults(obs_data_t *settings)
     obs_data_set_default_int(settings, "event_test_raid_viewers", 25);
     obs_data_set_default_int(settings, "event_test_gift_count", 5);
     obs_data_set_default_int(settings, "event_test_resub_months", 6);
+    obs_data_set_default_string(settings, "renderer_mode", "native");
 }
 
 static obs_source_info sourceInfo = {};
@@ -114,6 +124,7 @@ bool obs_module_load(void)
     sourceInfo.update = sourceUpdate;
     sourceInfo.video_tick = sourceTick;
     sourceInfo.video_render = sourceRender;
+    sourceInfo.enum_active_sources = sourceEnumActive;
     obs_register_source(&sourceInfo);
     blog(LOG_INFO, "[bokis-twitch-chat-plugin] Native plugin %s loaded", BOKIS_TWITCH_CHAT_VERSION);
     return true;
