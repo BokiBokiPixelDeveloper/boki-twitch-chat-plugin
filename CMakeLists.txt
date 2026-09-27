@@ -32,6 +32,7 @@ if(WIN32)
 else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebpdemux)
+    pkg_check_modules(ARCHIVE REQUIRED IMPORTED_TARGET libarchive)
     set(CHAT_WEBP_TARGET PkgConfig::WEBP)
 endif()
 
@@ -69,9 +70,17 @@ target_link_libraries(twitch-backend PUBLIC twitch-support chat-support Qt6::Web
 add_library(native-event-adapter STATIC src/renderer/native-event-adapter.cpp)
 target_link_libraries(native-event-adapter PUBLIC twitch-backend)
 
-add_library(web-event-support STATIC src/web/web-event-serializer.cpp src/web/widget-resource-request.cpp)
+if(WIN32)
+    find_package(LibArchive CONFIG REQUIRED)
+    set(CHAT_ARCHIVE_TARGET LibArchive::LibArchive)
+else()
+    set(CHAT_ARCHIVE_TARGET PkgConfig::ARCHIVE)
+endif()
+
+add_library(web-event-support STATIC src/web/web-event-serializer.cpp src/web/widget-resource-request.cpp
+    src/web/widget-package.cpp src/web/widget-package-importer.cpp)
 target_include_directories(web-event-support PUBLIC src)
-target_link_libraries(web-event-support PUBLIC event-core Qt6::Core)
+target_link_libraries(web-event-support PUBLIC event-core Qt6::Core ${CHAT_ARCHIVE_TARGET})
 
 if(WIN32)
     set(UPDATER_PLATFORM src/updater/post-exit-windows.cpp)

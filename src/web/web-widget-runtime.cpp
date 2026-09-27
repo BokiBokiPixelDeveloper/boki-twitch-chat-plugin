@@ -3,6 +3,7 @@
 #include "web/widget-resource-request.hpp"
 
 #include <QCryptographicHash>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QJsonArray>
@@ -13,6 +14,7 @@
 #include <QTcpSocket>
 #include <QTimer>
 #include <QUrl>
+#include <QUuid>
 #include <QThread>
 #include <QSemaphore>
 #include <mutex>
@@ -43,11 +45,16 @@ bool browserSourceRegistered()
 class WebWidgetRuntime::State : public QObject {
 public:
     State(std::shared_ptr<PluginRuntime> pluginRuntime,
-          std::shared_ptr<std::atomic_bool> accepted, uint32_t w, uint32_t h)
+          std::shared_ptr<std::atomic_bool> accepted, uint32_t w, uint32_t h, WidgetSelection widgetSelection)
         : runtime(std::move(pluginRuntime)), backendAccepted(std::move(accepted)), width(w), height(h),
-          webSocketServer(QStringLiteral("Boki Web Widget Bridge"), QWebSocketServer::NonSecureMode)
+          selection(std::move(widgetSelection)), webSocketServer(QStringLiteral("Boki Web Widget Bridge"), QWebSocketServer::NonSecureMode)
     {
         capability = randomToken();
+        if (selection.package) {
+            blog(LOG_INFO, "[StreamElements][Package:%s][Instance:%s] Runtime starting; compatibility=%s",
+                selection.package->id.toUtf8().constData(), selection.instanceId.toUtf8().constData(),
+                widgetCompatibilityName(selection.compatibility).toUtf8().constData());
+        }
         httpServer.setMaxPendingConnections(4);
         webSocketServer.setMaxPendingConnections(2);
         if (!httpServer.listen(QHostAddress::LocalHost, 0) || !webSocketServer.listen(QHostAddress::LocalHost, 0)) {
@@ -118,11 +125,18 @@ public:
                 if (request.size() > 8192) { client->disconnectFromHost(); return; }
                 client->setProperty("requestBytes", request);
                 if (!request.endsWith("\r\n\r\n")) return;
+                if (const auto packagePath = WidgetResourceRequest::packagePath(request, capability, httpServer.serverPort())) {
+                    respondPackage(client, *packagePath);
+                    return;
+                }
                 const auto parsed = WidgetResourceRequest::resourceName(request, capability, httpServer.serverPort());
                 if (!parsed) { respond(client, "text/plain", "Not found", "404 Not Found"); return; }
                 const QByteArray &name = *parsed;
-                if (name == "index.html") respondResource(client, ":/bokis-web-widget/index.html", "text/html; charset=utf-8");
+                if (name == "index.html" && selection.package) respondPackageWrapper(client);
+                else if (name == "index.html") respondResource(client, ":/bokis-web-widget/index.html", "text/html; charset=utf-8");
                 else if (name == "bridge.js") respondResource(client, ":/bokis-web-widget/bridge.js", "text/javascript; charset=utf-8");
+                else if (name == "streamelements-adapter.js") respondResource(client, ":/bokis-web-widget/streamelements-adapter.js", "text/javascript; charset=utf-8");
+                else if (name == "streamelements-config.js") respondStreamElementsConfig(client);
                 else if (name == "widget.js") respondResource(client, ":/bokis-web-widget/widget.js", "text/javascript; charset=utf-8");
                 else if (name == "style.css") respondResource(client, ":/bokis-web-widget/style.css", "text/css; charset=utf-8");
                 else if (name == "bootstrap.json") {
@@ -139,11 +153,104 @@ public:
         if (!file.open(QIODevice::ReadOnly)) { respond(client, "text/plain", "Unavailable", "500 Internal Server Error"); return; }
         respond(client, type, file.readAll());
     }
+    QByteArray packageUrl(const QString &path) const
+    {
+        return QByteArray("/") + capability + "/package/" + path.toUtf8();
+    }
+    QByteArray packageMimeType(const QString &path) const
+    {
+        if (path.endsWith(QStringLiteral(".css")) || (path.endsWith(QStringLiteral(".txt")) && selection.package && path == selection.package->entrypoints.css))
+            return "text/css; charset=utf-8";
+        if (path.endsWith(QStringLiteral(".js")) || (path.endsWith(QStringLiteral(".txt")) && selection.package && path == selection.package->entrypoints.javascript))
+            return "text/javascript; charset=utf-8";
+        if (path.endsWith(QStringLiteral(".html")) || path.endsWith(QStringLiteral(".htm"))) return "text/html; charset=utf-8";
+        if (path.endsWith(QStringLiteral(".svg"))) return "image/svg+xml";
+        if (path.endsWith(QStringLiteral(".png"))) return "image/png";
+        if (path.endsWith(QStringLiteral(".gif"))) return "image/gif";
+        if (path.endsWith(QStringLiteral(".webp"))) return "image/webp";
+        if (path.endsWith(QStringLiteral(".jpg")) || path.endsWith(QStringLiteral(".jpeg"))) return "image/jpeg";
+        return "application/octet-stream";
+    }
+    QJsonObject resolvedFields() const
+    {
+        QJsonObject fields;
+        if (!selection.package) return fields;
+        for (auto it = selection.package->fieldDefaults.begin(); it != selection.package->fieldDefaults.end(); ++it)
+            if (it.value().isObject() && it.value().toObject().contains("value")) fields.insert(it.key(), it.value().toObject().value("value"));
+        for (auto it = selection.package->savedFieldValues.begin(); it != selection.package->savedFieldValues.end(); ++it) fields.insert(it.key(), it.value());
+        return fields;
+    }
+    QByteArray expandFields(QByteArray source) const
+    {
+        const auto fields = resolvedFields();
+        for (auto it = fields.begin(); it != fields.end(); ++it) {
+            QByteArray value;
+            if (it.value().isString()) value = it.value().toString().toUtf8();
+            else if (it.value().isBool()) value = it.value().toBool() ? "true" : "false";
+            else if (it.value().isDouble()) value = QByteArray::number(it.value().toDouble(), 'g', 16);
+            else continue;
+            source.replace("{" + it.key().toUtf8() + "}", value);
+        }
+        return source;
+    }
+    std::optional<QByteArray> readPackageFile(const QString &path) const
+    {
+        if (!selection.package) return std::nullopt;
+        const auto entry = std::find_if(selection.package->files.cbegin(), selection.package->files.cend(),
+            [&](const WidgetFile &file) { return file.relativePath == path; });
+        if (entry == selection.package->files.cend()) return std::nullopt;
+        const QFileInfo root(selection.package->originalRoot);
+        const QFileInfo info(QDir(selection.package->originalRoot).filePath(path));
+        const QString canonicalRoot = root.canonicalFilePath();
+        const QString canonicalFile = info.canonicalFilePath();
+        if (info.isSymLink() || canonicalRoot.isEmpty() || canonicalFile.isEmpty() ||
+            !canonicalFile.startsWith(canonicalRoot + QDir::separator()) || info.size() != qint64(entry->size) ||
+            info.size() > 16 * 1024 * 1024) return std::nullopt;
+        QFile file(canonicalFile);
+        if (!file.open(QIODevice::ReadOnly)) return std::nullopt;
+        const QByteArray content = file.readAll();
+        if (QCryptographicHash::hash(content, QCryptographicHash::Sha256) != entry->sha256) return std::nullopt;
+        return content;
+    }
+    void respondPackage(QTcpSocket *client, const QString &path)
+    {
+        auto content = readPackageFile(path);
+        if (!content) { respond(client, "text/plain", "Not found", "404 Not Found"); return; }
+        if (path == selection.package->entrypoints.html || path == selection.package->entrypoints.css ||
+            path == selection.package->entrypoints.javascript) *content = expandFields(std::move(*content));
+        respond(client, packageMimeType(path), *content);
+    }
+    void respondStreamElementsConfig(QTcpSocket *client)
+    {
+        if (!selection.package) { respond(client, "text/plain", "Not found", "404 Not Found"); return; }
+        const QJsonObject fields = resolvedFields();
+        const QJsonObject value{{"packageId", selection.package->id}, {"instanceId", selection.instanceId},
+            {"fieldData", fields}, {"channel", QJsonObject{{"username", selection.channel}}}, {"currency", QJsonObject{{"symbol", ""}}}};
+        respond(client, "text/javascript; charset=utf-8", QByteArray("window.BokiStreamElementsConfig=") + QJsonDocument(value).toJson(QJsonDocument::Compact) + ";");
+    }
+    void respondPackageWrapper(QTcpSocket *client)
+    {
+        const auto &entrypoints = selection.package->entrypoints;
+        auto html = readPackageFile(entrypoints.html);
+        if (!html) { respond(client, "text/plain", "Unavailable", "500 Internal Server Error"); return; }
+        QByteArray document = "<!doctype html><html><head><meta charset=\"utf-8\">";
+        if (!entrypoints.css.isEmpty()) document += "<link rel=\"stylesheet\" href=\"" + packageUrl(entrypoints.css) + "\">";
+        document += "<script src=\"bridge.js\" defer></script>";
+        if (selection.compatibility == WidgetCompatibility::StreamElements)
+            document += "<script src=\"streamelements-config.js\" defer></script>"
+                        "<script src=\"https://code.jquery.com/jquery-3.7.1.min.js\" defer></script>";
+        document += "</head><body>" + expandFields(std::move(*html));
+        if (!entrypoints.javascript.isEmpty()) document += "<script src=\"" + packageUrl(entrypoints.javascript) + "\" defer></script>";
+        if (selection.compatibility == WidgetCompatibility::StreamElements)
+            document += "<script src=\"streamelements-adapter.js\" defer></script>";
+        document += "</body></html>";
+        respond(client, "text/html; charset=utf-8", document);
+    }
     static void respond(QTcpSocket *client, const QByteArray &type, const QByteArray &body, const QByteArray &code = "200 OK")
     {
         QByteArray headers = "HTTP/1.1 " + code + "\r\nContent-Type: " + type + "\r\nContent-Length: " + QByteArray::number(body.size()) +
             "\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n";
-        if (type.startsWith("text/html")) headers += "Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https://static-cdn.jtvnw.net https://cdn.7tv.app https://cdn.betterttv.net https://cdn.frankerfacez.com; connect-src 'self' ws://127.0.0.1:*; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'\r\n";
+        if (type.startsWith("text/html")) headers += "Content-Security-Policy: default-src 'none'; script-src 'self' https://code.jquery.com; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' https: data:; connect-src 'self' ws://127.0.0.1:* https:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'\r\n";
         client->write(headers + "\r\n" + body);
         client->disconnectFromHost();
     }
@@ -226,6 +333,7 @@ public:
     EventSubscription subscription;
     uint32_t width;
     uint32_t height;
+    WidgetSelection selection;
     QString status = QStringLiteral("Web Widget disabled");
     QByteArray capability;
     QTcpServer httpServer;
@@ -248,12 +356,13 @@ public:
     std::shared_ptr<PluginRuntime> runtime;
     std::shared_ptr<std::atomic_bool> accepted;
     uint32_t width = 0, height = 0;
+    WidgetSelection selection;
     QSemaphore started;
     State *state = nullptr;
     QString url;
     void run() override
     {
-        State bridge(runtime, accepted, width, height);
+        State bridge(runtime, accepted, width, height, selection);
         state = &bridge;
         url = bridge.url();
         started.release();
@@ -265,6 +374,11 @@ public:
 
 WebWidgetRuntime::WebWidgetRuntime(obs_source_t *parent, std::shared_ptr<PluginRuntime> runtime,
                                    std::shared_ptr<std::atomic_bool> backendAccepted, uint32_t width, uint32_t height)
+    : WebWidgetRuntime(parent, std::move(runtime), std::move(backendAccepted), width, height, {}) {}
+
+WebWidgetRuntime::WebWidgetRuntime(obs_source_t *parent, std::shared_ptr<PluginRuntime> runtime,
+                                   std::shared_ptr<std::atomic_bool> backendAccepted, uint32_t width, uint32_t height,
+                                   WidgetSelection selection)
     : parent_(parent)
 {
     if (!obs_get_module("obs-browser") || !browserSourceRegistered()) {
@@ -279,6 +393,7 @@ WebWidgetRuntime::WebWidgetRuntime(obs_source_t *parent, std::shared_ptr<PluginR
     worker_->accepted = std::move(backendAccepted);
     worker_->width = width;
     worker_->height = height;
+    worker_->selection = std::move(selection);
     worker_->start();
     worker_->started.acquire();
     if (worker_->url.isEmpty()) {

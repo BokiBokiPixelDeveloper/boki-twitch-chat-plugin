@@ -38,6 +38,7 @@ public:
     void checkForUpdates();
     void installUpdate();
     void refreshWebWidget();
+    void importWidgetPackage();
     obs_source_t *webChild() const;
     obs_source_t *source() const { return source_; }
 
@@ -65,6 +66,8 @@ private:
     std::shared_ptr<std::atomic_bool> backendAccepted_ = std::make_shared<std::atomic_bool>(false);
     std::unique_ptr<UpdateUi> updater_;
     std::unique_ptr<WebWidgetRuntime> webRuntime_;
+    std::unique_ptr<WidgetPackageStore> widgetStore_;
+    std::shared_ptr<const WidgetPackage> selectedWidgetPackage_;
     RendererMode rendererMode_ = RendererMode::Native;
 
 
@@ -94,6 +97,10 @@ private:
     QString channel_;
     QString accessToken_;
     QString refreshToken_;
+    QString widgetArchivePath_;
+    QString widgetPackageId_;
+    WidgetCompatibility widgetCompatibility_ = WidgetCompatibility::Auto;
+    bool widgetTrustAcknowledged_ = false;
     bool eventTestEnabled_ = false;
     SyntheticEventValues eventTestValues_;
 

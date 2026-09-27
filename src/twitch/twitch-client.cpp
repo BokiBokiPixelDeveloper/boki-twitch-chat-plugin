@@ -88,6 +88,7 @@ void TwitchClient::stop()
     pipeline_.stop();
     subscriptions_.clear(); scopes_.clear(); deviceCode_.clear();
     userId_.clear(); userLogin_.clear(); broadcasterId_.clear();
+    badgeCatalog_.clear(); pendingBadgeRequests_ = 0;
     setStatus(QStringLiteral("Disconnected"));
 }
 
@@ -276,8 +277,40 @@ void TwitchClient::resolveBroadcaster()
         broadcasterId_ = data.first().toObject().value(QStringLiteral("id")).toString();
         if (broadcasterId_.isEmpty()) { setStatus(QStringLiteral("Twitch channel ID is missing")); return; }
         pipeline_.setChannel(broadcasterId_, generation_);
-        connectEventSub(connectionSettings_.websocketUrl);
+        resolveBadges();
     });
+}
+
+void TwitchClient::resolveBadges()
+{
+    badgeCatalog_.clear();
+    pendingBadgeRequests_ = 2;
+    const auto request = [this](QUrl url) {
+        finish(transport_->get(apiRequest(url)), [this](int status, const QJsonObject &json) {
+            if (status == 200) {
+                for (const auto &setValue : json.value(QStringLiteral("data")).toArray()) {
+                    const auto set = setValue.toObject();
+                    const auto setId = set.value(QStringLiteral("set_id")).toString();
+                    for (const auto &versionValue : set.value(QStringLiteral("versions")).toArray()) {
+                        const auto version = versionValue.toObject();
+                        const auto id = version.value(QStringLiteral("id")).toString();
+                        const QUrl image(version.value(QStringLiteral("image_url_4x")).toString(), QUrl::StrictMode);
+                        if (!setId.isEmpty() && !id.isEmpty() && image.isValid() && image.scheme() == QStringLiteral("https") &&
+                            image.host().compare(QStringLiteral("static-cdn.jtvnw.net"), Qt::CaseInsensitive) == 0)
+                            badgeCatalog_.insert(setId + QLatin1Char('/') + id, image);
+                    }
+                }
+            }
+            if (--pendingBadgeRequests_ == 0) {
+                pipeline_.setBadgeCatalog(badgeCatalog_);
+                connectEventSub(connectionSettings_.websocketUrl);
+            }
+        });
+    };
+    request(QUrl(QStringLiteral("https://api.twitch.tv/helix/chat/badges/global")));
+    QUrl channel(QStringLiteral("https://api.twitch.tv/helix/chat/badges"));
+    QUrlQuery query; query.addQueryItem(QStringLiteral("broadcaster_id"), broadcasterId_); channel.setQuery(query);
+    request(channel);
 }
 
 void TwitchClient::connectEventSub(const QUrl &url, bool handoff)
