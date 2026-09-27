@@ -41,11 +41,13 @@ public:
     bool hasAvailableUpdate() const { return hasAvailable_; }
     bool busy() const { return state_ == State::Checking || state_ == State::Downloading; }
     State state() const { return state_; }
+    bool canCheck() const { return !busy() && state_ != State::Ready; }
+    bool canInstall() const { return canCheck() && hasAvailable_; }
 
 private:
     friend class UpdateCheckerTests;
+    friend class UpdateUiTests;
     void setStatus(State state, QString status);
-    void notifyStateChanged();
     void handleManifestReply(QNetworkReply *reply);
     void handleBinaryReply(QNetworkReply *reply, bool helper = false);
     bool stageBinaryAtomically(const QByteArray &payload, QString *errorMessage);

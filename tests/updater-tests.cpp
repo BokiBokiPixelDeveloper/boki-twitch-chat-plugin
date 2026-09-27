@@ -8,22 +8,11 @@
 #include <QNetworkReply>
 #include <QTemporaryDir>
 #include <QtTest>
-#include <obs.h>
 #include <cstring>
 #include <QStandardPaths>
 #include <QtEndian>
-#include <vector>
 
 namespace {
-struct Task { obs_task_t callback; void *data; };
-std::vector<Task> tasks;
-void drainUi()
-{
-    auto pending = std::move(tasks);
-    tasks.clear();
-    for (const auto &task : pending)
-        task.callback(task.data);
-}
 class Reply final : public QNetworkReply {
 public:
     explicit Reply(QObject *parent) : QNetworkReply(parent) { open(ReadOnly); }
@@ -86,19 +75,11 @@ QByteArray manifest(QString version = QStringLiteral("2.0.0"))
 }
 }
 
-// Exercise the production OBS queue boundary without requiring an OBS process.
-extern "C" void obs_queue_task(obs_task_type type, obs_task_t task, void *data, bool wait)
-{
-    QCOMPARE(type, OBS_TASK_UI);
-    QVERIFY(!wait);
-    tasks.push_back({task, data});
-}
 extern "C" uint32_t obs_get_version() { return (32u << 24) | (2u << 16) | 2u; }
 
 class UpdateCheckerTests : public QObject {
     Q_OBJECT
 private Q_SLOTS:
-    void cleanup() { drainUi(); }
     void lifecycle()
     {
         QTemporaryDir dir;
@@ -118,20 +99,17 @@ private Q_SLOTS:
         QCOMPARE(checker.state(), UpdateChecker::State::Checking);
         QVERIFY(checker.busy());
         QVERIFY(checker.status().startsWith("Checking"));
-        QCOMPARE(notifications, 0);
-        QVERIFY(tasks.empty()); // No synchronous or queued rebuild from the button.
+        QCOMPARE(notifications, 1); // Busy feedback is synchronous.
         checker.checkForUpdates();
         QCOMPARE(net->requests, 1);
         net->last->complete(manifest());
         QCOMPARE(checker.state(), UpdateChecker::State::Available);
         QVERIFY(checker.hasAvailableUpdate());
-        QCOMPARE(notifications, 0);
-        drainUi();
-        QCOMPARE(notifications, 1);
+        QCOMPARE(notifications, 2);
         checker.installAvailableUpdate();
         QCOMPARE(checker.state(), UpdateChecker::State::Downloading);
         QVERIFY(checker.status().startsWith("Downloading"));
-        QVERIFY(tasks.empty());
+        QCOMPARE(notifications, 3);
         checker.installAvailableUpdate();
         checker.checkForUpdates();
         QCOMPARE(net->requests, 2);
@@ -147,8 +125,7 @@ private Q_SLOTS:
         checker.checkForUpdates();
         checker.installAvailableUpdate();
         QCOMPARE(net->requests, 2);
-        drainUi();
-        QCOMPARE(notifications, 2);
+        QCOMPARE(notifications, 4);
     }
     void failures_data()
     {
@@ -171,7 +148,6 @@ private Q_SLOTS:
         checker.launcher_ = [](const QString &, const QString &, int fd, QString &) { return fd >= 0; };
         checker.checkForUpdates();
         net->last->complete(manifest());
-        drainUi();
         checker.installAvailableUpdate();
         if (failure == 3) {
             QFile blocker(checker.pendingDirectory_ + "/" + postexit::pluginFileName());
@@ -360,10 +336,10 @@ private Q_SLOTS:
         QCOMPARE(checker->state(), current ? UpdateChecker::State::Current : UpdateChecker::State::Error);
         QVERIFY(!checker->busy());
         QVERIFY(!checker->hasAvailableUpdate());
-        QCOMPARE(notifications, 0);
+        QCOMPARE(notifications, 2);
         checker.reset();
-        drainUi(); // Pending tasks must not dereference the destroyed source/checker.
-        QCOMPARE(notifications, 0);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QCOMPARE(notifications, 2);
     }
 };
 int main(int argc, char **argv)

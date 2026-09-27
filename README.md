@@ -39,8 +39,11 @@ For visual testing, enable **Event Test Mode** and use the existing Chat, Delete
 Clear, Follow, Subscription, Resubscription, Gift, Community Gift, Cheer, and
 Raid buttons. These events use the normal synthetic producer, validation,
 dispatcher, Web bridge, and widget path. **Refresh Web Widget** creates a clean
-private browser runtime. This widget is a development/reference surface and does
-not implement StreamElements APIs or widget imports.
+private browser runtime. Chat and channel events share one chronological feed;
+channel events remain visible and subscription notices include their viewer text.
+Resolved badges and structured media render as images, while unresolved badges
+and media retain readable text fallbacks. This widget is a development/reference
+surface and does not implement StreamElements APIs or widget imports.
 
 Twitch connectivity and normalized message data should be shared across all modes.
 

@@ -15,7 +15,7 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" BOKIS_TWITCH_CHAT_VERSION)
 string(STRIP "${BOKIS_TWITCH_CHAT_VERSION}" BOKIS_TWITCH_CHAT_VERSION)
 
 find_package(libobs REQUIRED)
-find_package(Qt6 6.9 REQUIRED COMPONENTS Core Gui Network WebSockets)
+find_package(Qt6 6.9 REQUIRED COMPONENTS Core Gui Widgets Network WebSockets)
 set(CHAT_EMOJI_RESOURCE "${CMAKE_CURRENT_SOURCE_DIR}/resources/emoji.qrc")
 if(WIN32)
     # Use Qt's recommended Windows-compatible TrueType wrapper around the same
@@ -96,6 +96,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/renderer/chat-source.cpp
     src/web/web-widget-runtime.cpp
     src/updater/update-checker.cpp
+    src/updater/update-ui.cpp
     ${CHAT_EMOJI_RESOURCE}
     resources/web-widget.qrc
 )
@@ -109,6 +110,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     OBS::libobs
     Qt6::Core
     Qt6::Gui
+    Qt6::Widgets
     Qt6::Network
     Qt6::WebSockets
 )

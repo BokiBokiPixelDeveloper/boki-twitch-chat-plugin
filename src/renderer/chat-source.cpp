@@ -88,13 +88,13 @@ bool buttonSyntheticEvent(obs_properties_t *, obs_property_t *property, void *da
 bool buttonCheckUpdates(obs_properties_t *, obs_property_t *, void *data)
 {
     static_cast<ChatSource *>(data)->checkForUpdates();
-    return true;
+    return false;
 }
 
 bool buttonInstallUpdate(obs_properties_t *, obs_property_t *, void *data)
 {
     static_cast<ChatSource *>(data)->installUpdate();
-    return true;
+    return false;
 }
 bool buttonRefreshWebWidget(obs_properties_t *, obs_property_t *, void *data)
 {
@@ -131,25 +131,15 @@ ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source, std::shared_p
         adapter->accept(std::move(delivery));
     });
 
-    updater_ = std::make_unique<UpdateChecker>(QString::fromUtf8(BOKIS_TWITCH_CHAT_VERSION), [this]() {
-        if (source_)
-            obs_source_update_properties(source_);
-    });
-
+    updater_ = std::make_unique<UpdateUi>(QString::fromUtf8(BOKIS_TWITCH_CHAT_VERSION),
+                                         obs_data_get_bool(settings, S_AUTO_UPDATE_CHECK));
     update(settings);
-
-    if (obs_data_get_bool(settings, S_AUTO_UPDATE_CHECK)) {
-        QTimer::singleShot(2500, updater_.get(), [this]() {
-            if (updater_)
-                updater_->checkForUpdates();
-        });
-    }
 }
 
 ChatSource::~ChatSource()
 {
     destroyWebRuntime();
-    updater_.reset(); // Invalidate queued updater UI notifications before source teardown.
+    updater_.reset(); // Cancel source-independent work and destroy the checker on the UI thread.
     adapter_->close();
     backend_->close();
     backend_.reset();
@@ -775,12 +765,13 @@ obs_properties_t *ChatSource::properties()
     const QByteArray versionInfo = QStringLiteral("Installed: %1").arg(QString::fromUtf8(BOKIS_TWITCH_CHAT_VERSION)).toUtf8();
     obs_properties_add_text(updates, "installed_version_info", versionInfo.constData(), OBS_TEXT_INFO);
     obs_properties_add_bool(updates, S_AUTO_UPDATE_CHECK, "Automatically check for updates on startup");
-    const QByteArray updateStatus = QStringLiteral("Status: %1").arg(updater_ ? updater_->status() : QStringLiteral("Updater unavailable")).toUtf8();
+    const auto updaterState = updater_->snapshot();
+    const QByteArray updateStatus = updater_->statusHtml(updaterState).toUtf8();
     obs_properties_add_text(updates, "update_status_info", updateStatus.constData(), OBS_TEXT_INFO);
-    obs_property_t *checkButton = obs_properties_add_button2(updates, "check_updates", "Check for updates", buttonCheckUpdates, this);
-    obs_property_set_enabled(checkButton, updater_ && !updater_->busy() && updater_->state() != UpdateChecker::State::Ready);
-    obs_property_t *installButton = obs_properties_add_button2(updates, "install_update", "Install update", buttonInstallUpdate, this);
-    obs_property_set_enabled(installButton, updater_ && updater_->hasAvailableUpdate() && !updater_->busy());
+    obs_property_t *checkButton = obs_properties_add_button2(updates, "check_updates", UpdateUi::CheckLabel, buttonCheckUpdates, this);
+    obs_property_set_enabled(checkButton, updaterState.canCheck);
+    obs_property_t *installButton = obs_properties_add_button2(updates, "install_update", UpdateUi::InstallLabel, buttonInstallUpdate, this);
+    obs_property_set_enabled(installButton, updaterState.canInstall);
     obs_properties_add_group(props, "update_group", "Updates", OBS_GROUP_NORMAL, updates);
 
     return props;

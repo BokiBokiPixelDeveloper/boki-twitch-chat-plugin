@@ -1,13 +1,12 @@
 :root { color-scheme: dark; font: clamp(13px, 2.2vmin, 20px) system-ui, sans-serif; }
 * { box-sizing: border-box; }
-body { display: flex; flex-direction: column; margin: 0; min-height: 100vh; color: #fff; background: transparent; overflow: hidden; text-shadow: 0 1px 2px #000; }
-#events, #chat { display: flex; flex-direction: column; gap: .35rem; padding: .5rem; min-width: 0; }
-#chat { margin-top: auto; overflow: hidden; }
+body { margin: 0; min-height: 100vh; color: #fff; background: transparent; overflow: hidden; text-shadow: 0 1px 2px #000; }
+#feed { display: flex; flex-direction: column; justify-content: flex-end; gap: .35rem; min-height: 100vh; padding: .5rem; min-width: 0; overflow: hidden; }
 .row, .event { width: max-content; max-width: 100%; padding: .35rem .55rem; border-radius: .4rem; background: #18181bcc; overflow-wrap: anywhere; }
 .badge, .badge-image { margin-right: .25rem; vertical-align: middle; }
 .badge { padding: .1rem .25rem; border-radius: .2rem; background: #9147ff; font-size: .7em; }
 .badge-image { height: 1em; }
 .emote { height: 1.5em; vertical-align: middle; }
+.media { display: block; max-width: min(20rem, 100%); max-height: 12rem; margin-top: .25rem; object-fit: contain; }
 .name { margin-right: .35rem; font-weight: 700; }
 .event { border-left: .3rem solid #9147ff; }
-@media (min-aspect-ratio: 3/2) { body { flex-direction: row; align-items: flex-end; } #events { max-width: 38%; } #chat { flex: 1; } }

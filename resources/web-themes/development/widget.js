@@ -1,9 +1,7 @@
 (() => {
   'use strict';
-  const chat = document.getElementById('chat');
-  const events = document.getElementById('events');
+  const feed = document.getElementById('feed');
   const rows = new Map();
-  const eventTimers = new Set();
   const messageKey = (channelId, messageId) => `${channelId}:${messageId}`;
   const text = value => document.createTextNode(value ?? '');
 
@@ -16,10 +14,8 @@
     return element;
   }
 
-  function renderMessage(data, header) {
-    const row = document.createElement('div');
-    row.className = 'row';
-    for (const badge of data.badges) {
+  function appendBadges(row, badges = []) {
+    for (const badge of badges) {
       if (badge.imageUrl) row.append(image(badge.imageUrl, badge.type, 'badge-image'));
       else {
         const label = document.createElement('span');
@@ -28,21 +24,62 @@
         row.append(label);
       }
     }
+  }
+
+  function appendFragments(row, fragments = []) {
+    for (const fragment of fragments) {
+      row.append(fragment.type === 'emote' && fragment.imageUrl
+        ? image(fragment.imageUrl, fragment.text, 'emote') : text(fragment.text));
+    }
+  }
+
+  function appendMedia(row, media = []) {
+    for (const asset of media) {
+      if (asset.imageUrl) row.append(image(asset.imageUrl, 'Media', 'media'));
+    }
+  }
+
+  function appendNotice(row, notice) {
+    if (!notice) return;
+    appendBadges(row, notice.badges);
+    if (notice.fragments?.length) {
+      row.append(text(' — '));
+      appendFragments(row, notice.fragments);
+    } else if (notice.text) {
+      row.append(text(` — ${notice.text}`));
+    }
+    appendMedia(row, notice.media);
+  }
+
+  function appendRow(row) {
+    feed.append(row);
+    trimFeed(100);
+  }
+
+  function renderMessage(data, header) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    appendBadges(row, data.badges);
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = data.user.displayName;
     if (data.user.color) name.style.color = data.user.color;
     row.append(name);
-    for (const fragment of data.fragments) {
-      row.append(fragment.type === 'emote' && fragment.imageUrl
-        ? image(fragment.imageUrl, fragment.text, 'emote') : text(fragment.text));
-    }
+    appendFragments(row, data.fragments);
+    appendMedia(row, data.media);
     const key = messageKey(header.channelId, data.messageId);
     const previous = rows.get(key);
     if (previous) previous.element.remove();
     rows.set(key, {element: row, userId: data.user.id});
-    chat.append(row);
-    trimMessages(100);
+    appendRow(row);
+  }
+
+  function renderEvent(label, notice) {
+    const row = document.createElement('div');
+    row.className = 'event';
+    row.append(text(label));
+    appendNotice(row, notice);
+    appendRow(row);
   }
 
   function removeMessage(channelId, messageId) {
@@ -61,29 +98,16 @@
     }
   }
 
-  function eventCard(label) {
-    const node = document.createElement('div');
-    node.className = 'event';
-    node.textContent = label;
-    events.append(node);
-    while (events.children.length > 50) events.firstElementChild.remove();
-    const timer = setTimeout(() => { eventTimers.delete(timer); node.remove(); }, 10000);
-    eventTimers.add(timer);
-  }
-
-  function trimMessages(limit) {
-    while (chat.children.length > limit) {
-      const oldest = chat.firstElementChild;
+  function trimFeed(limit) {
+    while (feed.children.length > limit) {
+      const oldest = feed.firstElementChild;
       for (const [key, record] of rows) if (record.element === oldest) rows.delete(key);
       oldest.remove();
     }
   }
 
   function reset() {
-    for (const timer of eventTimers) clearTimeout(timer);
-    eventTimers.clear();
-    chat.replaceChildren();
-    events.replaceChildren();
+    feed.replaceChildren();
     rows.clear();
   }
 
@@ -95,13 +119,13 @@
     case 'ChatMessage': renderMessage(data, header); break;
     case 'MessageDeleted': removeMessage(header.channelId, data.messageId); break;
     case 'ChatCleared': clearChat(header.channelId, data.user); break;
-    case 'Follow': eventCard(`${data.user.displayName} followed`); break;
-    case 'Subscription': eventCard(`${data.notice.user.displayName} subscribed (${data.terms.tier})`); break;
-    case 'Resubscription': eventCard(`${data.notice.user.displayName} resubscribed for ${data.cumulativeMonths} months`); break;
-    case 'GiftSubscription': eventCard(`${data.gifter.user?.displayName ?? 'Anonymous'} gifted a subscription to ${data.recipient.displayName}`); break;
-    case 'CommunityGiftSubscription': eventCard(`${data.gifter.user?.displayName ?? 'Anonymous'} gifted ${data.count} subscriptions`); break;
-    case 'Cheer': eventCard(`${data.user?.displayName ?? 'Anonymous'} cheered ${data.bits}: ${data.text}`); break;
-    case 'Raid': eventCard(`${data.from.displayName} raided with ${data.viewers} viewers`); break;
+    case 'Follow': renderEvent(`${data.user.displayName} followed`); break;
+    case 'Subscription': renderEvent(`${data.notice.user.displayName} subscribed (${data.terms.tier})`, data.notice); break;
+    case 'Resubscription': renderEvent(`${data.notice.user.displayName} resubscribed for ${data.cumulativeMonths} months`, data.notice); break;
+    case 'GiftSubscription': renderEvent(`${data.gifter.user?.displayName ?? 'Anonymous'} gifted a subscription to ${data.recipient.displayName}`, data.notice); break;
+    case 'CommunityGiftSubscription': renderEvent(`${data.gifter.user?.displayName ?? 'Anonymous'} gifted ${data.count} subscriptions`, data.notice); break;
+    case 'Cheer': renderEvent(`${data.user?.displayName ?? 'Anonymous'} cheered ${data.bits}: ${data.text}`); break;
+    case 'Raid': renderEvent(`${data.from.displayName} raided with ${data.viewers} viewers`); break;
     }
   });
 })();

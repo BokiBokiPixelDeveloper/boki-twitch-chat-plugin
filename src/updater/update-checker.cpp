@@ -4,7 +4,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QPointer>
+#include <QDebug>
+#include <QThread>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
@@ -150,22 +151,13 @@ bool UpdateChecker::resumePending()
 
 void UpdateChecker::setStatus(State state, QString status)
 {
-    // Button callbacks request their rebuild by returning true. Never rebuild here:
-    // Qt is still dispatching mouseReleaseEvent to the existing property button.
+    Q_ASSERT(QThread::currentThread() == thread());
     state_ = state;
     status_ = std::move(status);
-}
-
-void UpdateChecker::notifyStateChanged()
-{
-    // Network completions must cross the OBS UI queue, even on the Qt main thread.
-    // A queued completion must not retain the source or dereference a dead checker.
-    auto *guard = new QPointer<UpdateChecker>(this);
-    obs_queue_task(OBS_TASK_UI, [](void *data) {
-        const std::unique_ptr<QPointer<UpdateChecker>> checker(static_cast<QPointer<UpdateChecker> *>(data));
-        if (*checker && (*checker)->stateChanged_)
-            (*checker)->stateChanged_();
-    }, guard, false);
+    // The UI observer only changes existing widgets; it never rebuilds properties.
+    // Notify starts synchronously so repeated clicks are disabled immediately.
+    if (state_ == State::Error) qWarning().noquote() << "Updater:" << status_;
+    if (stateChanged_) stateChanged_();
 }
 
 bool UpdateChecker::isNewerVersion(const QString &candidate, const QString &current)
@@ -183,7 +175,8 @@ bool UpdateChecker::isNewerVersion(const QString &candidate, const QString &curr
 
 void UpdateChecker::checkForUpdates()
 {
-    if (busy() || state_ == State::Ready || resumePending())
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!canCheck() || resumePending())
         return;
 
     hasAvailable_ = false;
@@ -201,11 +194,10 @@ void UpdateChecker::checkForUpdates()
 void UpdateChecker::handleManifestReply(QNetworkReply *reply)
 {
     const auto guard = std::unique_ptr<QNetworkReply, void (*)(QNetworkReply *)>(reply, [](QNetworkReply *r) { r->deleteLater(); });
-    const auto notify = qScopeGuard([this] { notifyStateChanged(); });
 
     if (reply->error() != QNetworkReply::NoError) {
-        setStatus(State::Error, QStringLiteral("Update source unavailable: %1. Is the release repository still private?")
-                      .arg(reply->errorString()));
+        qWarning().noquote() << "Updater manifest request:" << reply->errorString();
+        setStatus(State::Error, QStringLiteral("Update failed: could not reach the release server. Try again later."));
         return;
     }
 
@@ -271,7 +263,8 @@ void UpdateChecker::handleManifestReply(QNetworkReply *reply)
 
 void UpdateChecker::installAvailableUpdate()
 {
-    if (busy() || !hasAvailable_ || state_ == State::Ready)
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!canInstall())
         return;
 
     if (resumePending()) return;
@@ -307,7 +300,6 @@ void UpdateChecker::handleBinaryReply(QNetworkReply *reply, bool helper)
         }
     });
     const auto guard = std::unique_ptr<QNetworkReply, void (*)(QNetworkReply *)>(reply, [](QNetworkReply *r) { r->deleteLater(); });
-    const auto notify = qScopeGuard([this] { notifyStateChanged(); });
 
     if (reply->error() != QNetworkReply::NoError) {
         setStatus(State::Error, QStringLiteral("Update download failed: %1").arg(reply->errorString()));
