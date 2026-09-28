@@ -170,8 +170,9 @@ SDK >= 10.0.20348, CMake >= 3.28, Python 3, and PowerShell 7. From the repositor
     ./scripts/install-windows.ps1
 
 Bootstrap downloads SHA-256-pinned OBS source/dependencies, matching Qt
-WebSockets source, libwebp and Inno Setup into .deps/windows. It builds OBS's
-development SDK without its UI/plugins, QtTest, QtWebSockets, and static libwebp.
+WebSockets source, libwebp, libarchive and Inno Setup into .deps/windows. It builds
+OBS's development SDK without its UI/plugins, QtTest, QtWebSockets, static libwebp,
+and static libarchive with zlib support.
 It does not install OBS or modify a real OBS plugin directory.
 Run it again in a new PowerShell session to restore the test runtime PATH,
 or prepend .deps/windows/qt/bin and .deps/windows/prebuilt/bin yourself.

@@ -43,6 +43,7 @@ void OrderedEventPipeline::stop()
     seen_.clear();
     seenOrder_.clear();
     validationFailures_ = 0;
+    badges_.clear();
     emotes_.clear();
 }
 
@@ -55,6 +56,12 @@ void OrderedEventPipeline::setChannel(QString channelId, std::uint64_t generatio
     generation_ = generation;
     channelId_ = std::move(channelId);
     if (loadThirdPartyEmotes) emotes_.setChannel(channelId_);
+}
+
+void OrderedEventPipeline::setBadgeCatalog(QHash<QString, QUrl> badges)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    badges_ = std::move(badges);
 }
 
 IngestResult OrderedEventPipeline::ingest(const QByteArray &envelope, EventOrigin origin)
@@ -86,6 +93,12 @@ IngestResult OrderedEventPipeline::queue(PluginEvent event)
         return IngestResult::Invalid;
     }
     if (event.header.channelId != channelId_) return IngestResult::WrongChannel;
+    if (auto *chat = chatContent(event.payload)) {
+        for (auto &badge : chat->badges) {
+            const auto resolved = badges_.value(badge.type + QLatin1Char('/') + badge.version);
+            if (!resolved.isEmpty()) badge.imageUrl = resolved;
+        }
+    }
     const auto now = clock_.elapsed();
     const auto id = event.header.eventId;
     if (seen_.contains(id) && now - seen_.value(id) < 10 * 60 * 1000) return IngestResult::Duplicate;

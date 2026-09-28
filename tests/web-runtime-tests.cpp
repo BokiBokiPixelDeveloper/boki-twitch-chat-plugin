@@ -1,4 +1,5 @@
 #include "web/web-widget-runtime.hpp"
+#include "web/widget-package-importer.hpp"
 #include <obs-module.h>
 #include <QTest>
 #include <QSignalSpy>
@@ -7,17 +8,20 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QThread>
+#include <QTemporaryDir>
+#include <QCryptographicHash>
 #include <thread>
 #include <mutex>
+#include <unordered_set>
 #include <cstdarg>
 
 namespace {
 QString browserUrl;
 int created = 0, detached = 0, released = 0;
-bool attached = false, failCreate = false, failAttach = false, moduleAvailable = true;
+bool failCreate = false, failAttach = false, moduleAvailable = true;
 std::mutex logMutex;
 QStringList logs;
-obs_source_t *fakeSource = reinterpret_cast<obs_source_t *>(quintptr(1));
+std::unordered_set<obs_source_t *> attachedSources;
 }
 extern "C" {
 obs_module_t *__wrap_obs_get_module(const char *) { return moduleAvailable ? reinterpret_cast<obs_module_t *>(quintptr(1)) : nullptr; }
@@ -28,12 +32,20 @@ obs_source_t *__wrap_obs_source_create_private(const char *, const char *, obs_d
     Q_ASSERT(QString::fromUtf8(obs_data_get_string(settings, "css")).isEmpty());
     if (failCreate) return nullptr;
     ++created;
-    return fakeSource;
+    return reinterpret_cast<obs_source_t *>(quintptr(created));
 }
 void __wrap_obs_source_set_muted(obs_source_t *, bool) {}
-bool __wrap_obs_source_add_active_child(obs_source_t *, obs_source_t *) { attached = !failAttach; return attached; }
-void __wrap_obs_source_remove_active_child(obs_source_t *, obs_source_t *) { Q_ASSERT(attached); attached = false; ++detached; }
-void __wrap_obs_source_release(obs_source_t *) { Q_ASSERT(!attached); ++released; }
+bool __wrap_obs_source_add_active_child(obs_source_t *, obs_source_t *source)
+{
+    if (failAttach) return false;
+    return attachedSources.insert(source).second;
+}
+void __wrap_obs_source_remove_active_child(obs_source_t *, obs_source_t *source)
+{
+    Q_ASSERT(attachedSources.erase(source) == 1);
+    ++detached;
+}
+void __wrap_obs_source_release(obs_source_t *source) { Q_ASSERT(!attachedSources.contains(source)); ++released; }
 void __wrap_obs_source_video_render(obs_source_t *) {}
 obs_data_t *__wrap_obs_source_get_settings(const obs_source_t *) { return obs_data_create(); }
 void __wrap_obs_source_update(obs_source_t *, obs_data_t *) {}
@@ -52,6 +64,18 @@ class WebRuntimeTests : public QObject {
     std::shared_ptr<std::atomic_bool> accepted;
     std::unique_ptr<WebWidgetRuntime> create()
     { return std::make_unique<WebWidgetRuntime>(nullptr, plugin, accepted, 640, 480); }
+    std::unique_ptr<WebWidgetRuntime> create(WebWidgetRuntime::WidgetSelection selection)
+    { return std::make_unique<WebWidgetRuntime>(nullptr, plugin, accepted, 640, 480, std::move(selection)); }
+    QByteArray get(const QString &relative)
+    {
+        const QUrl url(browserUrl); QTcpSocket http; http.connectToHost(url.host(), url.port());
+        if (!http.waitForConnected(2000)) return {};
+        const QByteArray base = url.path().left(url.path().lastIndexOf('/') + 1).toUtf8();
+        http.write("GET " + base + relative.toUtf8() + " HTTP/1.1\r\nHost: 127.0.0.1:" + QByteArray::number(url.port()) + "\r\n\r\n");
+        http.waitForBytesWritten(2000); QByteArray response;
+        while (http.waitForReadyRead(2000)) response += http.readAll();
+        return response.mid(response.indexOf("\r\n\r\n") + 4);
+    }
     QJsonObject bootstrap()
     {
         const QUrl url(browserUrl);
@@ -70,7 +94,8 @@ private Q_SLOTS:
     void init()
     {
         created = detached = released = 0;
-        attached = failCreate = failAttach = false; moduleAvailable = true;
+        failCreate = failAttach = false; moduleAvailable = true;
+        attachedSources.clear();
         { std::lock_guard lock(logMutex); logs.clear(); }
         plugin = std::make_shared<PluginRuntime>();
         accepted = std::make_shared<std::atomic_bool>(true);
@@ -145,6 +170,36 @@ private Q_SLOTS:
         failCreate = false; failAttach = true;
         { auto runtime = create(); plugin->shutdown(); }
         QCOMPARE(created, 1); QCOMPARE(detached, 0); QCOMPARE(released, 1);
+    }
+    void scrapbookPackageIsServedWithoutChangingOriginals()
+    {
+        if (!QFile::exists(QStringLiteral(SCRAPBOOK_FIXTURE))) QSKIP("Local Scrapbook fixture is unavailable");
+        QFile archive(QStringLiteral(SCRAPBOOK_FIXTURE)); QVERIFY(archive.open(QIODevice::ReadOnly));
+        const auto before = QCryptographicHash::hash(archive.readAll(), QCryptographicHash::Sha256); archive.close();
+        QTemporaryDir temporary; QVERIFY(temporary.isValid()); WidgetPackageStore store(temporary.filePath("store"));
+        WidgetPackageImporter importer(store); QString error; const auto package = importer.importArchive(QStringLiteral(SCRAPBOOK_FIXTURE), &error);
+        QVERIFY2(package, qPrintable(error));
+        auto first = create({package, WidgetCompatibility::StreamElements, QStringLiteral("channel"), QStringLiteral("instance-one")});
+        QVERIFY(first->available());
+        const auto wrapper = get(QStringLiteral("index.html"));
+        QVERIFY(wrapper.contains("streamelements-adapter.js")); QVERIFY(wrapper.contains("code.jquery.com/jquery-3.7.1.min.js"));
+        QVERIFY(wrapper.indexOf("package/js.txt") < wrapper.indexOf("streamelements-adapter.js"));
+        const QUrl firstUrl(browserUrl); const auto capability = firstUrl.path().split('/').value(1).toUtf8();
+        QTcpSocket script; script.connectToHost(firstUrl.host(), firstUrl.port()); QVERIFY(script.waitForConnected(2000));
+        script.write("GET /" + capability + "/package/js.txt HTTP/1.1\r\nHost: 127.0.0.1:" + QByteArray::number(firstUrl.port()) + "\r\n\r\n");
+        script.waitForBytesWritten(2000); QByteArray response; while (script.waitForReadyRead(2000)) response += script.readAll();
+        const auto javascript = response.mid(response.indexOf("\r\n\r\n") + 4);
+        QVERIFY(javascript.contains("just followed")); QVERIFY(!javascript.contains("{followerAlertMessage}")); QVERIFY(javascript.contains("\\p{C}"));
+        QFile installedScript(QDir(package->originalRoot).filePath("js.txt")); QVERIFY(installedScript.open(QIODevice::ReadOnly));
+        const auto originalScript = installedScript.readAll(); installedScript.close();
+        QVERIFY(installedScript.open(QIODevice::WriteOnly | QIODevice::Truncate)); QCOMPARE(installedScript.write("tampered"), qint64(8)); installedScript.close();
+        QCOMPARE(get(QStringLiteral("package/js.txt")), QByteArray("Not found"));
+        QVERIFY(installedScript.open(QIODevice::WriteOnly | QIODevice::Truncate)); QCOMPARE(installedScript.write(originalScript), qint64(originalScript.size())); installedScript.close();
+        auto second = create({package, WidgetCompatibility::StreamElements, QStringLiteral("channel"), QStringLiteral("instance-two")});
+        QVERIFY(second->available()); QVERIFY(first->available());
+        second.reset(); first.reset();
+        QVERIFY(archive.open(QIODevice::ReadOnly)); QCOMPARE(QCryptographicHash::hash(archive.readAll(), QCryptographicHash::Sha256), before);
+        QVERIFY(store.package(package->id));
     }
 };
 QTEST_GUILESS_MAIN(WebRuntimeTests)

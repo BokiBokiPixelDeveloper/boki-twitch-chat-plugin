@@ -15,6 +15,10 @@
     "url": "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz",
     "sha256": "e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564"
   },
+  "libarchive": {
+    "url": "https://codeload.github.com/libarchive/libarchive/tar.gz/refs/tags/v3.8.9",
+    "sha256": "744346f6bca195c8f894f847bb32a16e9bcae6002624a58fadc81e80f595b3cb"
+  },
   "qtwebsockets": {
     "url": "https://codeload.github.com/qt/qtwebsockets/zip/refs/tags/v6.11.1",
     "sha256": "d513e05b2b7f0f7b56a031fb966f4fb658824c45aac85be9c7f433409061f7f6"

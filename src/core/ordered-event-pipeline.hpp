@@ -15,6 +15,7 @@ public:
                                   QNetworkAccessManager *assets = nullptr);
     ~OrderedEventPipeline() override;
     void setChannel(QString channelId, std::uint64_t generation, bool loadThirdPartyEmotes = true);
+    void setBadgeCatalog(QHash<QString, QUrl> badges);
     void stop();
     IngestResult ingest(const QByteArray &envelope, EventOrigin origin = EventOrigin::Production);
     IngestResult ingest(PluginEvent event);
@@ -35,6 +36,7 @@ private:
     QTimer flushTimer_;
     QElapsedTimer clock_;
     QString channelId_;
+    QHash<QString, QUrl> badges_;
     std::uint64_t generation_ = 0;
     std::uint64_t nextSequence_ = 1;
     std::deque<std::shared_ptr<Pending>> pending_;

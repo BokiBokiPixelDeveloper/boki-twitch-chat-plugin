@@ -156,6 +156,12 @@ private Q_SLOTS:
             "GET /" + capability + "/index.html HTTP/1.1\r\nHost: example.com\r\n\r\n", capability, 4567));
         QVERIFY(!WidgetResourceRequest::resourceName(
             "GET /" + capability + "/index.html HTTP/1.1\r\nHost: 127.0.0.1:4567\r\nHost: 127.0.0.1:4567\r\n\r\n", capability, 4567));
+        const QByteArray packageRequest = "GET /" + capability + "/package/assets/icon.svg HTTP/1.1\r\nHost: 127.0.0.1:4567\r\n\r\n";
+        QCOMPARE(WidgetResourceRequest::packagePath(packageRequest, capability, 4567), std::optional<QString>(QStringLiteral("assets/icon.svg")));
+        QVERIFY(!WidgetResourceRequest::packagePath(
+            "GET /" + capability + "/package/../secret HTTP/1.1\r\nHost: 127.0.0.1:4567\r\n\r\n", capability, 4567));
+        QVERIFY(!WidgetResourceRequest::packagePath(
+            "GET /" + capability + "/package/assets%2ficon.svg HTTP/1.1\r\nHost: 127.0.0.1:4567\r\n\r\n", capability, 4567));
     }
 };
 

@@ -4,4 +4,5 @@
   <file alias="bridge.js">web-themes/development/bridge.js</file>
   <file alias="widget.js">web-themes/development/widget.js</file>
   <file alias="README.md">web-themes/development/README.md</file>
+  <file alias="streamelements-adapter.js">web-runtime/streamelements-adapter.js</file>
 </qresource></RCC>

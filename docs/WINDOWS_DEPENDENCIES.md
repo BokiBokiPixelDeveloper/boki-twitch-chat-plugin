@@ -10,6 +10,7 @@ scripts/windows-dependencies.json. Bootstrap verifies each before extraction.
 | Qt Core 6.11.1 | https://github.com/obsproject/obs-deps/releases/tag/2026-07-15 | Embedded DLL in helper; dynamically loaded by extracted worker |
 | Qt WebSockets 6.11.1 | https://github.com/qt/qtwebsockets/tree/v6.11.1 | Separate DLL in plugin/bin/64bit |
 | libwebp 1.6.0 | https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz | Statically linked decoder/demux; COPYING included |
+| libarchive 3.8.9 | https://github.com/libarchive/libarchive/tree/v3.8.9 | Statically linked ZIP reader with zlib; COPYING included |
 | Noto Color Emoji | resources/fonts/README.md in this repository | Embedded font; OFL included |
 | Microsoft Visual C++ runtime | Visual Studio redistributable files selected by CMake | Embedded helper runtime; Microsoft redistributable terms apply |
 | Inno Setup 6.5.4 | https://github.com/jrsoftware/issrc/releases/tag/is-6_5_4 | Installer compiler/stub |

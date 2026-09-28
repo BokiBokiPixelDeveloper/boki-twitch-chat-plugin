@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/plugin-runtime.hpp"
+#include "web/widget-package.hpp"
 #include <QString>
 #include <atomic>
 #include <memory>
@@ -12,8 +13,17 @@ using obs_source_t = struct obs_source;
 // event loop and never calls back into the parent or browser source.
 class WebWidgetRuntime final {
 public:
+    struct WidgetSelection {
+        std::shared_ptr<const WidgetPackage> package;
+        WidgetCompatibility compatibility = WidgetCompatibility::GenericWebWidget;
+        QString channel;
+        QString instanceId;
+    };
     WebWidgetRuntime(obs_source_t *parent, std::shared_ptr<PluginRuntime> runtime,
                      std::shared_ptr<std::atomic_bool> backendAccepted, uint32_t width, uint32_t height);
+    WebWidgetRuntime(obs_source_t *parent, std::shared_ptr<PluginRuntime> runtime,
+                     std::shared_ptr<std::atomic_bool> backendAccepted, uint32_t width, uint32_t height,
+                     WidgetSelection selection);
     ~WebWidgetRuntime();
     void shutdown();
 

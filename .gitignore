@@ -31,6 +31,9 @@ credentials.json
 .update-cache/
 .update-staging/
 
+# Local third-party widget reference archives and extracted sources
+/local-fixtures/
+
 # Compiler output
 *.o
 *.obj

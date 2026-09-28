@@ -32,11 +32,25 @@ target_link_libraries(web-event-tests PRIVATE web-event-support twitch-backend Q
 add_test(NAME web-event-tests COMMAND web-event-tests)
 set_tests_properties(web-event-tests PROPERTIES TIMEOUT 30)
 
+add_executable(widget-package-tests widget-package-tests.cpp)
+set_target_properties(widget-package-tests PROPERTIES AUTOMOC ON)
+target_link_libraries(widget-package-tests PRIVATE web-event-support Qt6::Test)
+target_compile_definitions(widget-package-tests PRIVATE SCRAPBOOK_FIXTURE="${PROJECT_SOURCE_DIR}/local-fixtures/streamelements/ScrapbookChatWidget8.zip")
+add_test(NAME widget-package-tests COMMAND widget-package-tests -v1 -o -,txt
+    -o "${CMAKE_CURRENT_BINARY_DIR}/widget-package-tests.txt,txt")
+set_tests_properties(widget-package-tests PROPERTIES TIMEOUT 30)
+if(WIN32)
+    set_tests_properties(widget-package-tests PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1")
+endif()
+
 find_program(NODE_EXECUTABLE node)
 if(NODE_EXECUTABLE)
     add_test(NAME web-widget-tests COMMAND ${NODE_EXECUTABLE} --test
         ${CMAKE_CURRENT_SOURCE_DIR}/web-widget-tests.js)
     set_tests_properties(web-widget-tests PROPERTIES TIMEOUT 30)
+    add_test(NAME streamelements-adapter-tests COMMAND ${NODE_EXECUTABLE} --test
+        ${CMAKE_CURRENT_SOURCE_DIR}/streamelements-adapter-tests.js)
+    set_tests_properties(streamelements-adapter-tests PROPERTIES TIMEOUT 30)
 endif()
 
 add_executable(updater-tests updater-tests.cpp ../src/updater/update-checker.cpp)
@@ -105,6 +119,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         ../resources/web-widget.qrc)
     set_target_properties(web-runtime-tests PROPERTIES AUTOMOC ON AUTORCC ON)
     target_link_libraries(web-runtime-tests PRIVATE web-event-support twitch-backend Qt6::Test OBS::libobs)
+    target_compile_definitions(web-runtime-tests PRIVATE SCRAPBOOK_FIXTURE="${PROJECT_SOURCE_DIR}/local-fixtures/streamelements/ScrapbookChatWidget8.zip")
     foreach(symbol obs_get_module obs_enum_source_types obs_source_create_private obs_source_set_muted
                    obs_source_add_active_child obs_source_remove_active_child obs_source_release
                    obs_source_video_render obs_source_get_settings obs_source_update blog)

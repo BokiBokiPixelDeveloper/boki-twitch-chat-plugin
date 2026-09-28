@@ -1,9 +1,13 @@
 #include "renderer/chat-source.hpp"
+#include "web/widget-package-importer.hpp"
 
+#include <QDir>
 #include <QFont>
 #include <QFontDatabase>
 #include <QMutexLocker>
 #include <QPainter>
+#include <QStandardPaths>
+#include <QUuid>
 
 #include <graphics/graphics.h>
 #include <obs-module.h>
@@ -41,6 +45,10 @@ constexpr const char *S_TEST_CHEER_BITS = "event_test_cheer_bits";
 constexpr const char *S_TEST_RAID_VIEWERS = "event_test_raid_viewers";
 constexpr const char *S_TEST_GIFT_COUNT = "event_test_gift_count";
 constexpr const char *S_TEST_RESUB_MONTHS = "event_test_resub_months";
+constexpr const char *S_WIDGET_ARCHIVE_PATH = "web_widget_zip_path";
+constexpr const char *S_WIDGET_PACKAGE_ID = "web_widget_package_id";
+constexpr const char *S_WIDGET_COMPATIBILITY = "web_widget_compatibility";
+constexpr const char *S_WIDGET_TRUST = "web_widget_trust_acknowledged";
 
 bool buttonConnect(obs_properties_t *, obs_property_t *, void *data)
 {
@@ -98,11 +106,19 @@ bool buttonRefreshWebWidget(obs_properties_t *, obs_property_t *, void *data)
     static_cast<ChatSource *>(data)->refreshWebWidget();
     return true;
 }
+bool buttonImportWebWidget(obs_properties_t *, obs_property_t *, void *data)
+{
+    static_cast<ChatSource *>(data)->importWidgetPackage();
+    return true;
+}
 } // namespace
 
 ChatSource::ChatSource(obs_data_t *settings, obs_source_t *source, std::shared_ptr<PluginRuntime> runtime)
     : source_(source), runtime_(std::move(runtime))
 {
+    const auto widgetRoot = QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
+        .filePath(QStringLiteral("bokis-twitch-chat-plugin/widgets"));
+    widgetStore_ = std::make_unique<WidgetPackageStore>(widgetRoot);
     // Promotion protects OBS source lifetime; queued delivery never captures this.
     const auto weakSource = std::shared_ptr<obs_weak_source_t>(obs_source_get_weak_source(source), obs_weak_source_release);
     backend_ = runtime_->attach([adapter = adapter_, accepted = backendAccepted_, weakSource, previousStatus = std::make_shared<QString>()](BackendAttachment::Delivery delivery) {
@@ -178,6 +194,11 @@ void ChatSource::update(obs_data_t *settings)
     channel_ = QString::fromUtf8(obs_data_get_string(settings, S_CHANNEL));
     accessToken_ = QString::fromUtf8(obs_data_get_string(settings, S_ACCESS_TOKEN));
     refreshToken_ = QString::fromUtf8(obs_data_get_string(settings, S_REFRESH_TOKEN));
+    widgetArchivePath_ = QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_ARCHIVE_PATH));
+    widgetPackageId_ = QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_PACKAGE_ID));
+    widgetCompatibility_ = widgetCompatibilityFromName(QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_COMPATIBILITY)));
+    widgetTrustAcknowledged_ = obs_data_get_bool(settings, S_WIDGET_TRUST);
+    selectedWidgetPackage_ = widgetStore_->package(widgetPackageId_);
     eventTestEnabled_ = obs_data_get_bool(settings, S_EVENT_TEST_ENABLED);
     eventTestValues_.displayName = QString::fromUtf8(obs_data_get_string(settings, S_TEST_DISPLAY_NAME));
     eventTestValues_.chatText = QString::fromUtf8(obs_data_get_string(settings, S_TEST_CHAT_TEXT));
@@ -234,7 +255,53 @@ void ChatSource::refreshWebWidget()
 
 void ChatSource::createWebRuntime()
 {
-    webRuntime_ = std::make_unique<WebWidgetRuntime>(source_, runtime_, backendAccepted_, canvasWidth_, canvasHeight_);
+    const auto selected = widgetCompatibility_ == WidgetCompatibility::Auto && selectedWidgetPackage_
+        ? selectedWidgetPackage_->detectedCompatibility : widgetCompatibility_;
+    webRuntime_ = std::make_unique<WebWidgetRuntime>(source_, runtime_, backendAccepted_, canvasWidth_, canvasHeight_,
+        WebWidgetRuntime::WidgetSelection{selectedWidgetPackage_, selected, channel_, QUuid::createUuid().toString(QUuid::WithoutBraces)});
+}
+
+void ChatSource::importWidgetPackage()
+{
+    QString archivePath;
+    WidgetPackageStore *store = nullptr;
+    {
+        std::lock_guard lock(sourceMutex_);
+        if (!widgetTrustAcknowledged_) {
+            blog(LOG_WARNING, "[WebWidget][Import] Trust acknowledgement is required before installing executable widget code");
+            return;
+        }
+        archivePath = widgetArchivePath_;
+        store = widgetStore_.get();
+    }
+
+    QString error;
+    WidgetPackageImporter importer(*store);
+    const auto package = importer.importArchive(archivePath, &error);
+    if (!package) {
+        blog(LOG_WARNING, "[WebWidget][Import] %s", error.toUtf8().constData());
+        return;
+    }
+
+    obs_source_t *source = nullptr;
+    bool refresh = false;
+    const QString packageId = package->id;
+    {
+        std::lock_guard lock(sourceMutex_);
+        selectedWidgetPackage_ = package;
+        widgetPackageId_ = packageId;
+        source = source_ ? obs_source_get_ref(source_) : nullptr;
+        refresh = rendererMode_ == RendererMode::WebWidget;
+    }
+    if (source) {
+        obs_data_t *settings = obs_source_get_settings(source);
+        obs_data_set_string(settings, S_WIDGET_PACKAGE_ID, packageId.toUtf8().constData());
+        obs_source_update(source, settings);
+        obs_data_release(settings);
+        obs_source_release(source);
+    }
+    blog(LOG_INFO, "[WebWidget][Import] Installed package %s", packageId.toUtf8().constData());
+    if (refresh) refreshWebWidget();
 }
 
 void ChatSource::destroyWebRuntime()
@@ -674,9 +741,30 @@ obs_properties_t *ChatSource::properties()
     obs_property_list_add_string(mode, "Native", "native");
     obs_property_list_add_string(mode, "Web Widget", "web_widget");
     if (rendererMode_ == RendererMode::WebWidget) {
+        obs_properties_add_path(props, S_WIDGET_ARCHIVE_PATH, "Widget ZIP", OBS_PATH_FILE, "Widget ZIP (*.zip)", nullptr);
+        obs_properties_add_bool(props, S_WIDGET_TRUST,
+            "I understand this widget runs local JavaScript and may access network resources. Install only trusted widgets.");
+        auto *packageList = obs_properties_add_list(props, S_WIDGET_PACKAGE_ID, "Installed Widget",
+            OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+        obs_property_list_add_string(packageList, "Bundled development widget", "");
+        for (const auto &package : widgetStore_->packages()) {
+            const QByteArray label = QStringLiteral("%1 (%2)").arg(package->displayName, package->id.left(12)).toUtf8();
+            obs_property_list_add_string(packageList, label.constData(), package->id.toUtf8().constData());
+        }
+        auto *compatibility = obs_properties_add_list(props, S_WIDGET_COMPATIBILITY, "Compatibility",
+            OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+        obs_property_list_add_string(compatibility, "Auto", "auto");
+        obs_property_list_add_string(compatibility, "Generic Web Widget", "generic");
+        obs_property_list_add_string(compatibility, "StreamElements", "streamelements");
+        obs_properties_add_button2(props, "web_import_widget", "Import Widget ZIP", buttonImportWebWidget, this);
+        if (selectedWidgetPackage_) {
+            const QByteArray packageInfo = QStringLiteral("Selected: %1 — %2 detected").arg(selectedWidgetPackage_->displayName,
+                widgetCompatibilityName(selectedWidgetPackage_->detectedCompatibility)).toUtf8();
+            obs_properties_add_text(props, "web_package_info", packageInfo.constData(), OBS_TEXT_INFO);
+        }
         const QByteArray webStatus = (webRuntime_ ? webRuntime_->status() : QStringLiteral("Web Widget unavailable")).toUtf8();
         obs_properties_add_text(props, "web_status_info", webStatus.constData(), OBS_TEXT_INFO);
-        obs_properties_add_button2(props, "web_refresh", "Refresh Web Widget", buttonRefreshWebWidget, this);
+        obs_properties_add_button2(props, "web_refresh", "Reload Widget", buttonRefreshWebWidget, this);
     }
 
     obs_properties_t *twitch = obs_properties_create();

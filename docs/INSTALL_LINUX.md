@@ -1,8 +1,8 @@
 # Install on Linux
 
 This package is for **native OBS Studio 32.x on Linux x86_64**. Releases are built
-on rolling Arch Linux with Qt 6.9+ and libwebp. They require compatible system
-libraries; a successful dependency check does not guarantee compatibility with
+on rolling Arch Linux with Qt 6.9+, libwebp and libarchive. They require compatible
+system libraries; a successful dependency check does not guarantee compatibility with
 every distribution or custom OBS build. Flatpak, Snap, portable OBS and system-wide
 installation are not supported by this installer. No administrator access is needed.
 

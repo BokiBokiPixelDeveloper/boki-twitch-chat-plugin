@@ -72,6 +72,26 @@ Invoke-Build @('-S', "$deps/webp-source/libwebp-1.6.0", '-B', "$deps/webp-build"
 Invoke-Build @('--build', "$deps/webp-build", '--config', 'RelWithDebInfo', '--parallel')
 Invoke-Build @('--install', "$deps/webp-build", '--config', 'RelWithDebInfo')
 Copy-Item "$deps/webp-source/libwebp-1.6.0/COPYING" "$deps/licenses/libwebp-COPYING.txt"
+
+# Build a static libarchive with zlib support for ordinary compressed ZIPs.
+# Other optional codecs and command-line tools are unnecessary for widget import.
+$archiveSourceArchive = Get-Verified 'libarchive' 'tar.gz'
+New-Item -ItemType Directory -Force "$deps/libarchive-source" | Out-Null
+& tar -xf $archiveSourceArchive -C "$deps/libarchive-source"
+if ($LASTEXITCODE -ne 0) { throw 'libarchive extraction failed' }
+Invoke-Build @('-S', "$deps/libarchive-source/libarchive-3.8.9", '-B', "$deps/libarchive-build",
+    '-G', 'Visual Studio 17 2022', '-A', 'x64', '-DBUILD_SHARED_LIBS=OFF', '-DENABLE_TEST=OFF',
+    '-DENABLE_TAR=OFF', '-DENABLE_CPIO=OFF', '-DENABLE_CAT=OFF', '-DENABLE_UNZIP=OFF',
+    '-DENABLE_OPENSSL=OFF', '-DENABLE_MD=OFF', '-DENABLE_LIBB2=OFF', '-DENABLE_LZ4=OFF', '-DENABLE_LZO=OFF',
+    '-DENABLE_LZMA=OFF', '-DENABLE_ZSTD=OFF', '-DENABLE_BZip2=OFF', '-DENABLE_LIBXML2=OFF',
+    '-DENABLE_EXPAT=OFF', '-DENABLE_WIN32_XMLLITE=OFF',
+    '-DENABLE_PCREPOSIX=OFF', '-DENABLE_PCRE2POSIX=OFF', '-DENABLE_ICONV=OFF',
+    '-DENABLE_CNG=OFF', '-DENABLE_ACL=OFF', '-DENABLE_XATTR=OFF', '-DENABLE_ZLIB=ON',
+    "-DCMAKE_PREFIX_PATH=$deps/prebuilt", "-DCMAKE_INSTALL_PREFIX=$deps/libarchive",
+    '-DCMAKE_CONFIGURATION_TYPES=RelWithDebInfo')
+Invoke-Build @('--build', "$deps/libarchive-build", '--config', 'RelWithDebInfo', '--parallel')
+Invoke-Build @('--install', "$deps/libarchive-build", '--config', 'RelWithDebInfo')
+Copy-Item "$deps/libarchive-source/libarchive-3.8.9/COPYING" "$deps/licenses/libarchive-COPYING.txt"
 # Ship the actual Qt license files from the pinned distribution.
 $qtLicenses = @(Get-ChildItem "$deps/qt" -Directory -Recurse | Where-Object { $_.Name -eq 'licenses' })
 if (!$qtLicenses.Count) { throw 'Qt distribution is missing its licenses directory' }

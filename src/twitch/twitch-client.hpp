@@ -49,6 +49,7 @@ private:
     void finishAuth(const QJsonObject &json);
     void pollDeviceToken();
     void resolveBroadcaster();
+    void resolveBadges();
     void connectEventSub(const QUrl &url, bool handoff = false);
     void handleEventSubMessage(EventSubSocket *sender, const QString &payload);
     void subscribeEvents();
@@ -73,6 +74,8 @@ private:
     QSet<QString> scopes_;
     QHash<QString, TwitchSubscriptionState> subscriptions_;
     QString userId_, userLogin_, broadcasterId_, deviceCode_, sessionId_;
+    QHash<QString, QUrl> badgeCatalog_;
+    int pendingBadgeRequests_ = 0;
     QString statusText_{QStringLiteral("Disconnected")};
     std::uint64_t generation_ = 0;
     std::uint64_t sessionGeneration_ = 0;

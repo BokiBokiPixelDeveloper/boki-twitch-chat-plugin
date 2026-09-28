@@ -84,6 +84,10 @@ protected:
             else response.bytes = json({{"client_id", "test-client"}, {"user_id", userId}, {"login", "broadcaster"}, {"scopes", scopes}});
         } else if (path == QStringLiteral("/helix/users")) {
             ++lookups; response.bytes = R"({"data":[{"id":"100","login":"broadcaster"}]})";
+        } else if (path == QStringLiteral("/helix/chat/badges/global")) {
+            response.bytes = R"({"data":[{"set_id":"moderator","versions":[{"id":"1","image_url_4x":"https://static-cdn.jtvnw.net/badges/v1/moderator/3"}]}]})";
+        } else if (path == QStringLiteral("/helix/chat/badges")) {
+            response.bytes = R"({"data":[{"set_id":"subscriber","versions":[{"id":"12","image_url_4x":"https://static-cdn.jtvnw.net/badges/v1/subscriber/3"}]}]})";
         } else if (path == QStringLiteral("/helix/eventsub/subscriptions") || path == QStringLiteral("/eventsub/subscriptions")) {
             const auto body = QJsonDocument::fromJson(outgoing->readAll()).object();
             subscriptions.push_back(body); response.status = 202;
@@ -267,6 +271,7 @@ void TwitchProducerTests::allEventsThroughLiveProducer()
     QCOMPARE(chat.user.login, QStringLiteral("viewer")); QCOMPARE(chat.user.id, QStringLiteral("200"));
     QCOMPARE(chat.user.color, QColor(QStringLiteral("#AB12EF")));
     QCOMPARE(chat.badges[0].type, QStringLiteral("subscriber")); QCOMPARE(chat.badges[0].info, QStringLiteral("14"));
+    QCOMPARE(chat.badges[0].imageUrl, QUrl(QStringLiteral("https://static-cdn.jtvnw.net/badges/v1/subscriber/3")));
     QVERIFY(chat.metadata.reply); QCOMPARE(chat.metadata.reply->parentMessageId, QStringLiteral("parent-001"));
     QSet<int> providers;
     for (const auto &fragment : chat.fragments) if (fragment.provider) {
