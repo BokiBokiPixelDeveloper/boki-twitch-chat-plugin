@@ -73,10 +73,12 @@ target_link_libraries(native-event-adapter PUBLIC twitch-backend)
 if(WIN32)
     # Upstream libarchive installs headers and libraries, but no CMake package
     # config. Use CMake's FindLibArchive module and carry the compression
-    # dependency required by the static Windows build explicitly.
+    # dependencies required by the static Windows build explicitly. Libarchive
+    # uses Windows CNG for secure temporary-name generation even when archive
+    # encryption support is disabled.
     find_package(LibArchive REQUIRED)
     find_package(ZLIB REQUIRED)
-    set(CHAT_ARCHIVE_TARGET LibArchive::LibArchive ZLIB::ZLIB)
+    set(CHAT_ARCHIVE_TARGET LibArchive::LibArchive ZLIB::ZLIB bcrypt)
 else()
     set(CHAT_ARCHIVE_TARGET PkgConfig::ARCHIVE)
 endif()
