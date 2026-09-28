@@ -78,7 +78,11 @@ if(WIN32)
     # encryption support is disabled.
     find_package(LibArchive REQUIRED)
     find_package(ZLIB REQUIRED)
-    set(CHAT_ARCHIVE_TARGET LibArchive::LibArchive ZLIB::ZLIB bcrypt)
+    # Every consumer of archive.h needs the static ABI, including tests that
+    # create ZIP fixtures and inherit libarchive through web-event-support.
+    target_compile_definitions(LibArchive::LibArchive INTERFACE LIBARCHIVE_STATIC)
+    target_link_libraries(LibArchive::LibArchive INTERFACE ZLIB::ZLIB bcrypt)
+    set(CHAT_ARCHIVE_TARGET LibArchive::LibArchive)
 else()
     set(CHAT_ARCHIVE_TARGET PkgConfig::ARCHIVE)
 endif()
@@ -87,9 +91,6 @@ add_library(web-event-support STATIC src/web/web-event-serializer.cpp src/web/wi
     src/web/widget-package.cpp src/web/widget-package-importer.cpp)
 target_include_directories(web-event-support PUBLIC src)
 target_link_libraries(web-event-support PUBLIC event-core Qt6::Core ${CHAT_ARCHIVE_TARGET})
-if(WIN32)
-    target_compile_definitions(web-event-support PRIVATE LIBARCHIVE_STATIC)
-endif()
 
 if(WIN32)
     set(UPDATER_PLATFORM src/updater/post-exit-windows.cpp)
