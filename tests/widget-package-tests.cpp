@@ -52,6 +52,20 @@ private Q_SLOTS:
         QVERIFY(store.package(package->id));
         const auto original = QFile(QDir(package->originalRoot).filePath("js.txt")); QVERIFY(original.exists());
         const auto again = importer.importArchive(path, &error); QVERIFY(again); QCOMPARE(again->id, package->id);
+        QCOMPARE(QDir(store.root()).entryList(QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot), QStringList{package->id});
+    }
+    void importsWithoutManifest()
+    {
+        QTemporaryDir temporary; QVERIFY(temporary.isValid());
+        const QString path = temporary.filePath("widget.zip");
+        QVERIFY(writeArchive(path, {{"index.html", "<div>Widget</div>"}}));
+        WidgetPackageStore store(temporary.filePath("store")); WidgetPackageImporter importer(store);
+        QString error; const auto package = importer.importArchive(path, &error);
+        QVERIFY2(package, qPrintable(error));
+        QCOMPARE(package->entrypoints.html, QStringLiteral("index.html"));
+        QCOMPARE(package->detectedCompatibility, WidgetCompatibility::GenericWebWidget);
+        QVERIFY(store.package(package->id));
+        QCOMPARE(QDir(store.root()).entryList(QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot), QStringList{package->id});
     }
     void rejectsUnsafePathsAndLeavesNoPackage()
     {

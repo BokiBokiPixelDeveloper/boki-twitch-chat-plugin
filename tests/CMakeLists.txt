@@ -36,8 +36,12 @@ add_executable(widget-package-tests widget-package-tests.cpp)
 set_target_properties(widget-package-tests PROPERTIES AUTOMOC ON)
 target_link_libraries(widget-package-tests PRIVATE web-event-support Qt6::Test)
 target_compile_definitions(widget-package-tests PRIVATE SCRAPBOOK_FIXTURE="${PROJECT_SOURCE_DIR}/local-fixtures/streamelements/ScrapbookChatWidget8.zip")
-add_test(NAME widget-package-tests COMMAND widget-package-tests)
+add_test(NAME widget-package-tests COMMAND widget-package-tests -v1 -o -,txt
+    -o "${CMAKE_CURRENT_BINARY_DIR}/widget-package-tests.txt,txt")
 set_tests_properties(widget-package-tests PROPERTIES TIMEOUT 30)
+if(WIN32)
+    set_tests_properties(widget-package-tests PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1")
+endif()
 
 find_program(NODE_EXECUTABLE node)
 if(NODE_EXECUTABLE)

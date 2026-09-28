@@ -130,6 +130,9 @@ std::shared_ptr<const WidgetPackage> WidgetPackageImporter::importArchive(const 
     QFile ini(QDir(originalRoot).filePath(QStringLiteral("widget.ini")));
     if (ini.open(QIODevice::ReadOnly)) {
         const QString text = QString::fromUtf8(ini.readAll());
+        // Release the staging file before install() renames its directory.
+        // An open QFile prevents that rename on Windows.
+        ini.close();
         const auto role = [&](const QString &section) {
             const QRegularExpression expression(QStringLiteral("\\[%1\\]\\s*\\n\\s*path\\s*=\\s*\\\"?([^\\\"\\r\\n]+)").arg(section));
             const auto match = expression.match(text); return match.hasMatch() ? match.captured(1).trimmed() : QString{};
