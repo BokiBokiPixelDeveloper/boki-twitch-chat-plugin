@@ -71,8 +71,12 @@ add_library(native-event-adapter STATIC src/renderer/native-event-adapter.cpp)
 target_link_libraries(native-event-adapter PUBLIC twitch-backend)
 
 if(WIN32)
-    find_package(LibArchive CONFIG REQUIRED)
-    set(CHAT_ARCHIVE_TARGET LibArchive::LibArchive)
+    # Upstream libarchive installs headers and libraries, but no CMake package
+    # config. Use CMake's FindLibArchive module and carry the compression
+    # dependency required by the static Windows build explicitly.
+    find_package(LibArchive REQUIRED)
+    find_package(ZLIB REQUIRED)
+    set(CHAT_ARCHIVE_TARGET LibArchive::LibArchive ZLIB::ZLIB)
 else()
     set(CHAT_ARCHIVE_TARGET PkgConfig::ARCHIVE)
 endif()
@@ -81,6 +85,9 @@ add_library(web-event-support STATIC src/web/web-event-serializer.cpp src/web/wi
     src/web/widget-package.cpp src/web/widget-package-importer.cpp)
 target_include_directories(web-event-support PUBLIC src)
 target_link_libraries(web-event-support PUBLIC event-core Qt6::Core ${CHAT_ARCHIVE_TARGET})
+if(WIN32)
+    target_compile_definitions(web-event-support PRIVATE LIBARCHIVE_STATIC)
+endif()
 
 if(WIN32)
     set(UPDATER_PLATFORM src/updater/post-exit-windows.cpp)

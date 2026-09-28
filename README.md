@@ -73,8 +73,9 @@ shortened. Active messages retain shared image ownership beyond the cache's life
 The native text renderer uses the bundled **Noto Color Emoji** font, so Unicode
 emoji work offline without a separately installed font. Its license and pinned
 upstream revision are in `resources/fonts/`. This adds about 10 MiB to the plugin.
-Building now requires **Qt 6.9+** for modern emoji shaping and **libwebp** for WebP
-decoding; the Arch bootstrap and CI install the dependencies.
+Building now requires **Qt 6.9+** for modern emoji shaping, **libwebp** for WebP
+decoding, and **libarchive** for widget ZIP import; the Arch bootstrap and CI install
+the dependencies.
 
 In OBS source properties, use **Messages → Test emojis and emotes** to display
 Unicode emoji plus a static and animated sample without Twitch access. Live Twitch

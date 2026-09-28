@@ -25,9 +25,9 @@ locks and launch functions.
 
 The windows-x86_64 preset uses Visual Studio 2022 x64 and RelWithDebInfo.
 Bootstrap verifies pinned OBS 32.2.2 source/dependencies, Qt 6.11.1, WebSockets,
-QtTest source, libwebp and Inno Setup. OBS's binary Qt omits WebSockets and Test,
+QtTest source, libwebp, libarchive and Inno Setup. OBS's binary Qt omits WebSockets and Test,
 so these modules are built against the supplied Qt without rebuilding Core/GUI.
-libwebp is static. The output includes the native plugin DLL, Qt worker, and
+libwebp and libarchive are static. The output includes the native plugin DLL, Qt worker, and
 resource-containing helper EXE.
 
 ## 4. Installer
