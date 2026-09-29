@@ -1,6 +1,7 @@
 #include "web/widget-resource-request.hpp"
 #include <QDir>
 #include <QList>
+#include <QUrl>
 
 std::optional<QByteArray> WidgetResourceRequest::resourceName(
     const QByteArray &request, const QByteArray &capability, quint16 port)
@@ -47,9 +48,21 @@ std::optional<QString> WidgetResourceRequest::packagePath(
     const QByteArray prefix = "/" + capability + "/package/";
     const QByteArray target = parts.at(1);
     if (!target.startsWith(prefix)) return std::nullopt;
-    const QByteArray encodedPath = target.mid(prefix.size());
-    if (encodedPath.isEmpty() || encodedPath.contains('?') || encodedPath.contains('#') || encodedPath.contains('%') || encodedPath.contains('\\')) return std::nullopt;
-    const QString value = QString::fromUtf8(encodedPath);
+    // Query strings are cache keys, not manifest filenames. Decode once, then
+    // validate the same normalized path representation used by the importer.
+    const QByteArray encodedPath = target.mid(prefix.size()).split('?').first();
+    if (encodedPath.isEmpty() || encodedPath.contains('#') || encodedPath.contains('\\')) return std::nullopt;
+    const auto hex = [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); };
+    for (qsizetype i = 0; i < encodedPath.size(); ++i) {
+        if (encodedPath[i] != '%') continue;
+        if (i + 2 >= encodedPath.size() || !hex(encodedPath[i + 1]) || !hex(encodedPath[i + 2])) return std::nullopt;
+        const auto escape = encodedPath.mid(i, 3).toLower();
+        if (escape == "%2f" || escape == "%5c") return std::nullopt;
+        i += 2;
+    }
+    const QByteArray decoded = QByteArray::fromPercentEncoding(encodedPath);
+    const QString value = QString::fromUtf8(decoded);
+    if (value.toUtf8() != decoded || value.contains('\\')) return std::nullopt;
     if (value.isEmpty() || value.startsWith('/') || value.contains(QChar::Null) || QDir::cleanPath(value) != value) return std::nullopt;
     for (const auto &component : value.split('/'))
         if (component.isEmpty() || component == QStringLiteral(".") || component == QStringLiteral("..")) return std::nullopt;

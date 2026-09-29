@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QThread>
 #include <QTemporaryDir>
+#include <QProcess>
 #include <QCryptographicHash>
 #include <thread>
 #include <mutex>
@@ -171,6 +172,94 @@ private Q_SLOTS:
         { auto runtime = create(); plugin->shutdown(); }
         QCOMPARE(created, 1); QCOMPARE(detached, 0); QCOMPARE(released, 1);
     }
+    void startupTimeoutIsTerminalAndReloadable()
+    {
+        auto runtime = create();
+        QTRY_VERIFY_WITH_TIMEOUT(runtime->status().contains("failed"), 12000);
+        QVERIFY(runtime->status().contains("bridge startup timed out"));
+        const auto config = bootstrap();
+        const QUrl url(browserUrl);
+        QWebSocket client(QStringLiteral("http://127.0.0.1:%1").arg(url.port()));
+        QSignalSpy messages(&client, &QWebSocket::textMessageReceived);
+        client.open(QUrl(config.value("webSocketUrl").toString()));
+        QTRY_COMPARE(client.state(), QAbstractSocket::ConnectedState);
+        client.sendTextMessage(QString::fromUtf8(QJsonDocument(QJsonObject{{"type", "hello"}, {"capability", config.value("capability")}}).toJson()));
+        QTRY_COMPARE(messages.size(), 1);
+        client.sendTextMessage(QStringLiteral("{\"type\":\"ready\"}"));
+        QTest::qWait(80);
+        QVERIFY(runtime->status().contains("failed"));
+        runtime.reset();
+        runtime = create();
+        QCOMPARE(runtime->status(), QStringLiteral("Web Widget loading"));
+        runtime.reset();
+        QCOMPARE(created, 2); QCOMPARE(detached, 2); QCOMPARE(released, 2);
+    }
+    void genericAndDevelopmentBrowserExecution()
+    {
+        if (!qEnvironmentVariableIsSet("RUN_WIDGET_BROWSER_TESTS")) QSKIP("Set RUN_WIDGET_BROWSER_TESTS=1 for Chromium execution");
+        QTemporaryDir temporary;
+        auto package = std::make_shared<WidgetPackage>();
+        package->originalRoot = temporary.path();
+        package->entrypoints.html = "index.html";
+        const QByteArray html = "<div id=\"generic\"></div><script>window.genericInitialized=typeof BokiChat==='object';</script>";
+        QFile file(temporary.filePath("index.html")); QVERIFY(file.open(QIODevice::WriteOnly)); file.write(html); file.close();
+        package->files.push_back({"index.html", QCryptographicHash::hash(html, QCryptographicHash::Sha256), quint64(html.size())});
+        for (const auto &kind : {QStringLiteral("generic"), QStringLiteral("development")}) {
+            auto runtime = kind == "generic" ? create({package, WidgetCompatibility::GenericWebWidget, {}, "generic-probe"}) : create();
+            auto backend = plugin->attach([](BackendAttachment::Delivery) {});
+            backend->setEventTestEnabled(true);
+            QProcess browser;
+            browser.start("node", {QStringLiteral(BROWSER_PROBE), browserUrl, kind});
+            QVERIFY(browser.waitForStarted());
+            for (int i = 0; i < 200 && browser.state() != QProcess::NotRunning; ++i) {
+                QTest::qWait(100);
+                if (runtime->status().contains("ready")) backend->injectSyntheticEvent(SyntheticEventKind::ChatMessage);
+            }
+            const auto output = browser.readAllStandardOutput() + browser.readAllStandardError();
+            qInfo().noquote() << output;
+            QCOMPARE(browser.state(), QProcess::NotRunning);
+            QCOMPARE(browser.exitStatus(), QProcess::NormalExit);
+            QVERIFY(output.contains("\"rows\":"));
+            QCOMPARE(browser.exitCode(), 0);
+            QVERIFY(runtime->status().contains("ready") || runtime->status().contains("disconnected"));
+            backend->close();
+        }
+    }
+    void scrapbookBrowserExecution()
+    {
+        if (!qEnvironmentVariableIsSet("RUN_WIDGET_BROWSER_TESTS")) QSKIP("Set RUN_WIDGET_BROWSER_TESTS=1 for Chromium execution");
+        QTemporaryDir temporary; WidgetPackageStore store(temporary.filePath("store"));
+        WidgetPackageImporter importer(store); QString error;
+        const auto package = importer.importArchive(QStringLiteral(SCRAPBOOK_FIXTURE), &error);
+        QVERIFY2(package, qPrintable(error));
+        auto runtime = create({package, WidgetCompatibility::StreamElements, QStringLiteral("channel"), QStringLiteral("browser-probe")});
+        auto backend = plugin->attach([](BackendAttachment::Delivery) {});
+        backend->setEventTestEnabled(true);
+        QProcess blocked;
+        blocked.start("node", {QStringLiteral(BROWSER_PROBE), browserUrl, "blocked-script"});
+        QVERIFY(blocked.waitForStarted());
+        QTRY_COMPARE_WITH_TIMEOUT(blocked.state(), QProcess::NotRunning, 20000);
+        qInfo().noquote() << blocked.readAllStandardOutput() + blocked.readAllStandardError();
+        QCOMPARE(blocked.exitCode(), 0);
+        QTRY_VERIFY(runtime->status().contains("failed"));
+        QVERIFY(runtime->status().contains("script"));
+        runtime.reset();
+        runtime = create({package, WidgetCompatibility::StreamElements, QStringLiteral("channel"), QStringLiteral("browser-reload")});
+        QProcess browser;
+        browser.start("node", {QStringLiteral(BROWSER_PROBE), browserUrl});
+        QVERIFY(browser.waitForStarted());
+        for (int i = 0; i < 200 && browser.state() != QProcess::NotRunning; ++i) {
+            QTest::qWait(100);
+            if (runtime->status().contains("ready")) backend->injectSyntheticEvent(SyntheticEventKind::ChatMessage);
+        }
+        const auto output = browser.readAllStandardOutput() + browser.readAllStandardError();
+        qInfo().noquote() << output;
+        QCOMPARE(browser.state(), QProcess::NotRunning);
+        QCOMPARE(browser.exitStatus(), QProcess::NormalExit);
+        QVERIFY(output.contains("\"rows\":"));
+        QCOMPARE(browser.exitCode(), 0);
+        backend->close();
+    }
     void scrapbookPackageIsServedWithoutChangingOriginals()
     {
         if (!QFile::exists(QStringLiteral(SCRAPBOOK_FIXTURE))) QSKIP("Local Scrapbook fixture is unavailable");
@@ -183,7 +272,7 @@ private Q_SLOTS:
         QVERIFY(first->available());
         const auto wrapper = get(QStringLiteral("index.html"));
         QVERIFY(wrapper.contains("streamelements-adapter.js")); QVERIFY(wrapper.contains("code.jquery.com/jquery-3.7.1.min.js"));
-        QVERIFY(wrapper.indexOf("package/js.txt") < wrapper.indexOf("streamelements-adapter.js"));
+        QVERIFY(wrapper.indexOf("streamelements-adapter.js") < wrapper.indexOf("package/js.txt"));
         const QUrl firstUrl(browserUrl); const auto capability = firstUrl.path().split('/').value(1).toUtf8();
         QTcpSocket script; script.connectToHost(firstUrl.host(), firstUrl.port()); QVERIFY(script.waitForConnected(2000));
         script.write("GET /" + capability + "/package/js.txt HTTP/1.1\r\nHost: 127.0.0.1:" + QByteArray::number(firstUrl.port()) + "\r\n\r\n");

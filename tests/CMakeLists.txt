@@ -119,12 +119,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         ../resources/web-widget.qrc)
     set_target_properties(web-runtime-tests PROPERTIES AUTOMOC ON AUTORCC ON)
     target_link_libraries(web-runtime-tests PRIVATE web-event-support twitch-backend Qt6::Test OBS::libobs)
-    target_compile_definitions(web-runtime-tests PRIVATE SCRAPBOOK_FIXTURE="${PROJECT_SOURCE_DIR}/local-fixtures/streamelements/ScrapbookChatWidget8.zip")
+    target_compile_definitions(web-runtime-tests PRIVATE BROWSER_PROBE="${CMAKE_CURRENT_SOURCE_DIR}/widget-browser-probe.js" SCRAPBOOK_FIXTURE="${PROJECT_SOURCE_DIR}/local-fixtures/streamelements/ScrapbookChatWidget8.zip")
     foreach(symbol obs_get_module obs_enum_source_types obs_source_create_private obs_source_set_muted
                    obs_source_add_active_child obs_source_remove_active_child obs_source_release
                    obs_source_video_render obs_source_get_settings obs_source_update blog)
         target_link_options(web-runtime-tests PRIVATE "LINKER:--wrap=${symbol}")
     endforeach()
     add_test(NAME web-runtime-tests COMMAND web-runtime-tests)
-    set_tests_properties(web-runtime-tests PROPERTIES TIMEOUT 30)
+    set_tests_properties(web-runtime-tests PROPERTIES TIMEOUT 90)
+endif()
+
+add_executable(widget-status-ui-tests widget-status-ui-tests.cpp ../src/web/widget-status-ui.cpp)
+set_target_properties(widget-status-ui-tests PROPERTIES AUTOMOC ON)
+target_include_directories(widget-status-ui-tests PRIVATE ../src)
+target_link_libraries(widget-status-ui-tests PRIVATE Qt6::Widgets Qt6::Test Threads::Threads)
+add_test(NAME widget-status-ui-tests COMMAND widget-status-ui-tests -v1 -o -,txt
+    -o "${CMAKE_CURRENT_BINARY_DIR}/widget-status-ui-tests.txt,txt")
+if(WIN32)
+    set_tests_properties(widget-status-ui-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 30)
+else()
+    set_tests_properties(widget-status-ui-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()

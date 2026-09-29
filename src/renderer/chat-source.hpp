@@ -4,6 +4,7 @@
 #include "renderer/native-event-adapter.hpp"
 #include "renderer/renderer-mode.hpp"
 #include "web/web-widget-runtime.hpp"
+#include "web/widget-status-ui.hpp"
 #include <mutex>
 #include "updater/update-ui.hpp"
 
@@ -45,6 +46,9 @@ public:
     QString status() const;
 
 private:
+    WidgetStatusUi widgetStatusUi_;
+    bool webReloading_ = false;
+    QString webWidgetStatus() const;
     void createWebRuntime();
     void destroyWebRuntime();
     void enqueueMessage(ChatMessage message);

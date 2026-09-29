@@ -106,9 +106,11 @@
   Object.defineProperty(window, 'SE_API', {value: api, configurable: false, writable: false});
   log('Adapter started');
   BokiChat.onEvent(dispatch);
-  BokiChat.ready.then(() => {
+  Promise.all([BokiChat.ready, window.BokiWidgetLifecycle?.documentReady]).then(() => {
+    log('onWidgetLoad dispatch started');
     window.dispatchEvent(new CustomEvent('onWidgetLoad', {detail: {fieldData: fields, channel: {username: config.channel?.username || ''},
       currency: {symbol: config.currency?.symbol || ''}, session: {data: {}}, recents: []}}));
     log('onWidgetLoad dispatched');
+    window.BokiWidgetLifecycle?.complete();
   });
 })();
