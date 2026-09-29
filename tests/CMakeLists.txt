@@ -133,5 +133,11 @@ add_executable(widget-status-ui-tests widget-status-ui-tests.cpp ../src/web/widg
 set_target_properties(widget-status-ui-tests PROPERTIES AUTOMOC ON)
 target_include_directories(widget-status-ui-tests PRIVATE ../src)
 target_link_libraries(widget-status-ui-tests PRIVATE Qt6::Widgets Qt6::Test Threads::Threads)
-add_test(NAME widget-status-ui-tests COMMAND widget-status-ui-tests)
-set_tests_properties(widget-status-ui-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+add_test(NAME widget-status-ui-tests COMMAND widget-status-ui-tests -v1 -o -,txt
+    -o "${CMAKE_CURRENT_BINARY_DIR}/widget-status-ui-tests.txt,txt")
+if(WIN32)
+    set_tests_properties(widget-status-ui-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 30)
+else()
+    set_tests_properties(widget-status-ui-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+endif()
