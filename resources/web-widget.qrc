@@ -5,4 +5,5 @@
   <file alias="widget.js">web-themes/development/widget.js</file>
   <file alias="README.md">web-themes/development/README.md</file>
   <file alias="streamelements-adapter.js">web-runtime/streamelements-adapter.js</file>
+  <file alias="imported-bootstrap.js">web-runtime/imported-bootstrap.js</file>
 </qresource></RCC>

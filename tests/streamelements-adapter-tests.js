@@ -12,7 +12,7 @@ function adapter() {
     addEventListener(type, callback) { listeners.set(type, callback); }, dispatchEvent(value) { dispatched.push(value); return true; }},
     CustomEvent, BokiChat: {ready: Promise.resolve(), onEvent(callback) { eventListener = callback; }}, console: {warn(value) { warnings.push(value); }}, Promise, Object, String, Number, Boolean, Date, Array, Proxy};
   vm.runInNewContext(source, context, {filename: 'streamelements-adapter.js'});
-  return Promise.resolve().then(() => ({context, dispatched, warnings, emit: value => eventListener(value)}));
+  return Promise.resolve().then(() => Promise.resolve()).then(() => ({context, dispatched, warnings, emit: value => eventListener(value)}));
 }
 const header = {timestamp: '2026-01-01T00:00:00.000Z'};
 const user = {id: 'user/1', login: 'viewer', displayName: 'Viewer', color: '#123456'};
@@ -81,4 +81,49 @@ test('unsupported SE API access logs and rejects without fabricated state', asyn
   await assert.rejects(promise); assert.match(widget.warnings.at(-1), /Unsupported API call: SE_API.store.get/);
   assert.equal(widget.context.window.SE_API.cheerFilter('Cheer100'), 'Cheer100');
   assert.equal(widget.context.window.SE_API.sanitize({message: '<img onerror=x>'}), '&#60;img onerror=x&#62;');
+});
+
+const bootstrapSource = fs.readFileSync(path.join(__dirname, '..', 'resources', 'web-runtime', 'imported-bootstrap.js'), 'utf8');
+function bootstrap(compatibility) {
+  const events = new Map(), timers = [];
+  let domReady;
+  const window = {
+    addEventListener(name, callback) { events.set(name, callback); },
+    removeEventListener(name) { events.delete(name); }
+  };
+  const document = {
+    currentScript: {dataset: {compatibility}},
+    addEventListener(name, callback) { assert.equal(name, 'DOMContentLoaded'); domReady = callback; }
+  };
+  vm.runInNewContext(bootstrapSource, {window, document, Promise, Object, setTimeout: callback => timers.push(callback)});
+  return {lifecycle:window.BokiWidgetLifecycle, events, domReady:()=>domReady(), finish:()=>timers.splice(0).forEach(callback=>callback())};
+}
+test('generic document readiness does not require proprietary widget APIs', async () => {
+  const widget = bootstrap('generic'); let ready = false;
+  widget.lifecycle.ready.then(()=>{ready=true;});
+  await Promise.resolve(); assert.equal(ready,false);
+  widget.domReady(); await Promise.resolve(); widget.finish(); await Promise.resolve();
+  assert.equal(ready,true);
+  assert.equal(widget.events.size,0);
+});
+test('StreamElements readiness waits for adapter dispatch completion', async () => {
+  const widget = bootstrap('streamelements'); let ready = false;
+  widget.lifecycle.ready.then(()=>{ready=true;});
+  widget.domReady(); await Promise.resolve(); widget.finish(); await Promise.resolve();
+  assert.equal(ready,false);
+  widget.lifecycle.complete(); widget.finish(); await Promise.resolve();
+  assert.equal(ready,true);
+});
+test('initialization errors remain failed even after late completion', async () => {
+  for (const tag of ['SCRIPT','LINK']) {
+    const widget = bootstrap('streamelements');
+    widget.events.get('error')({target:{tagName:tag,rel:'stylesheet'}});
+    widget.lifecycle.complete(); widget.finish();
+    await assert.rejects(widget.lifecycle.ready, reason => reason === (tag === 'SCRIPT' ? 'script-resource' : 'stylesheet-resource'));
+  }
+  const widget = bootstrap('streamelements');
+  widget.lifecycle.complete();
+  widget.events.get('unhandledrejection')({reason:'sensitive exception that must not be forwarded'});
+  widget.finish();
+  await assert.rejects(widget.lifecycle.ready, reason => reason === 'javascript');
 });

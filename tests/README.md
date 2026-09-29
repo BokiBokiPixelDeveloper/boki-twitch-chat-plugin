@@ -217,3 +217,43 @@ in the ASan/UBSan configuration above, then select those suites with CTest.
 `web-widget-tests` rejects inline DOM styling and validates fixed username color
 classes. The existing dispatcher suite covers publication racing subscription
 closure and verifies no delivery after closure.
+
+## Imported widget browser and OBS smoke tests
+
+The normal `web-runtime-tests` suite uses production Qt HTTP/WebSocket servers with
+only the OBS source boundary wrapped. It tests incomplete requests, connected clients,
+startup timeout, terminal failure, repeated teardown, integrity checks, and the ignored
+Scrapbook ZIP when available. `widget-status-ui-tests` checks live label updates,
+source isolation, owner destruction, HTML escaping, and unchanged scroll position.
+
+With Node 22+, Chromium, and the local Scrapbook fixture installed, enable actual
+browser execution (no npm packages are required):
+
+```sh
+RUN_WIDGET_BROWSER_TESTS=1 ctest --test-dir build/linux-x86_64 --output-on-failure
+```
+
+The probe executes Generic, Development, and real imported Scrapbook documents through
+the production server. It blocks jQuery deliberately, checks failure, replaces the
+runtime, and checks a successful `onWidgetLoad` and rendered synthetic message.
+`WIDGET_CHROMIUM` can select a Chromium executable. The headless test browser uses
+`--no-sandbox`; run only the trusted local fixture. Production OBS configuration is
+unaffected. Loopback access and permission to launch browser subprocesses are required.
+
+On Linux with a graphical X11/XWayland session and OBS including frontend-tools and
+obs-browser, run the optional full OBS test:
+
+```sh
+python tests/obs-widget-smoke.py \
+  --plugin build/linux-x86_64/bokis-twitch-chat-plugin.so \
+  --output build/scrapbook-smoke
+```
+
+This opens a temporary OBS window with an isolated configuration/cache, no credentials,
+and dummy account identifiers for synthetic event routing. It imports the original ZIP,
+checks six Ready checkpoints, captures a source screenshot, reloads twice immediately,
+switches Native/Web, creates a second instance, deletes sources, and exits cleanly.
+Logs/screenshots remain in the output directory; the temporary profile is removed.
+Chromium first-run UI is disabled for this automation. Review the screenshot to confirm
+visual rendering; a Ready handshake alone is not a pixel-level assertion. The script
+must not be loaded into a production scene collection.

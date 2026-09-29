@@ -67,6 +67,7 @@ public:
         timer.setInterval(20);
         QObject::connect(&timer, &QTimer::timeout, this, [this] { pump(); });
         timer.start();
+        blog(LOG_INFO, "[WebWidget][Runtime] HTTP and WebSocket servers started");
         loadTimer.start();
         setStatus(QStringLiteral("Web Widget loading"));
     }
@@ -77,6 +78,7 @@ public:
         Q_ASSERT(QThread::currentThread() == thread());
         if (cleaned) return;
         cleaned = true;
+        phase = Phase::Stopping;
         stopped = true;
         subscription.close();
         blog(LOG_INFO, "[WebWidget][Runtime] Event subscription released");
@@ -102,8 +104,18 @@ public:
             delete client;
         }
         blog(LOG_INFO, "[WebWidget][Runtime] HTTP server stopped");
+        phase = Phase::Stopped;
     }
 
+    void fail(const QString &reason)
+    {
+        if (phase == Phase::Failed || stopped) return;
+        phase = Phase::Failed;
+        ready = false;
+        subscription.close();
+        setStatus(QStringLiteral("Web Widget failed: ") + reason + QStringLiteral(". Reload Widget to retry."));
+        blog(LOG_WARNING, "[WebWidget][Runtime] %s", getStatus().toUtf8().constData());
+    }
     void setStatus(QString value) { std::lock_guard lock(statusMutex); status = std::move(value); }
     QString getStatus() const { std::lock_guard lock(statusMutex); return status; }
     QString url() const
@@ -134,6 +146,7 @@ public:
                 const QByteArray &name = *parsed;
                 if (name == "index.html" && selection.package) respondPackageWrapper(client);
                 else if (name == "index.html") respondResource(client, ":/bokis-web-widget/index.html", "text/html; charset=utf-8");
+                else if (name == "imported-bootstrap.js") respondResource(client, ":/bokis-web-widget/imported-bootstrap.js", "text/javascript; charset=utf-8");
                 else if (name == "bridge.js") respondResource(client, ":/bokis-web-widget/bridge.js", "text/javascript; charset=utf-8");
                 else if (name == "streamelements-adapter.js") respondResource(client, ":/bokis-web-widget/streamelements-adapter.js", "text/javascript; charset=utf-8");
                 else if (name == "streamelements-config.js") respondStreamElementsConfig(client);
@@ -147,7 +160,7 @@ public:
             });
         }
     }
-    static void respondResource(QTcpSocket *client, const QString &path, const QByteArray &type)
+    void respondResource(QTcpSocket *client, const QString &path, const QByteArray &type)
     {
         QFile file(path);
         if (!file.open(QIODevice::ReadOnly)) { respond(client, "text/plain", "Unavailable", "500 Internal Server Error"); return; }
@@ -155,13 +168,14 @@ public:
     }
     QByteArray packageUrl(const QString &path) const
     {
-        return QByteArray("/") + capability + "/package/" + path.toUtf8();
+        return QByteArray("/") + capability + "/package/" + QUrl::toPercentEncoding(path, "/");
     }
-    QByteArray packageMimeType(const QString &path) const
+    QByteArray packageMimeType(const QString &originalPath) const
     {
-        if (path.endsWith(QStringLiteral(".css")) || (path.endsWith(QStringLiteral(".txt")) && selection.package && path == selection.package->entrypoints.css))
+        const auto path = originalPath.toLower();
+        if (path.endsWith(QStringLiteral(".css")) || (path.endsWith(QStringLiteral(".txt")) && selection.package && originalPath == selection.package->entrypoints.css))
             return "text/css; charset=utf-8";
-        if (path.endsWith(QStringLiteral(".js")) || (path.endsWith(QStringLiteral(".txt")) && selection.package && path == selection.package->entrypoints.javascript))
+        if (path.endsWith(QStringLiteral(".js")) || (path.endsWith(QStringLiteral(".txt")) && selection.package && originalPath == selection.package->entrypoints.javascript))
             return "text/javascript; charset=utf-8";
         if (path.endsWith(QStringLiteral(".html")) || path.endsWith(QStringLiteral(".htm"))) return "text/html; charset=utf-8";
         if (path.endsWith(QStringLiteral(".svg"))) return "image/svg+xml";
@@ -169,6 +183,11 @@ public:
         if (path.endsWith(QStringLiteral(".gif"))) return "image/gif";
         if (path.endsWith(QStringLiteral(".webp"))) return "image/webp";
         if (path.endsWith(QStringLiteral(".jpg")) || path.endsWith(QStringLiteral(".jpeg"))) return "image/jpeg";
+        if (path.endsWith(".woff")) return "font/woff";
+        if (path.endsWith(".woff2")) return "font/woff2";
+        if (path.endsWith(".ttf")) return "font/ttf";
+        if (path.endsWith(".otf")) return "font/otf";
+        if (path.endsWith(".json")) return "application/json";
         return "application/octet-stream";
     }
     QJsonObject resolvedFields() const
@@ -218,6 +237,8 @@ public:
         if (!content) { respond(client, "text/plain", "Not found", "404 Not Found"); return; }
         if (path == selection.package->entrypoints.html || path == selection.package->entrypoints.css ||
             path == selection.package->entrypoints.javascript) *content = expandFields(std::move(*content));
+        if (path == selection.package->entrypoints.css) blog(LOG_INFO, "[WebWidget][Runtime] Package stylesheet served");
+        if (path == selection.package->entrypoints.javascript) blog(LOG_INFO, "[WebWidget][Runtime] Package script served");
         respond(client, packageMimeType(path), *content);
     }
     void respondStreamElementsConfig(QTcpSocket *client)
@@ -232,25 +253,36 @@ public:
     {
         const auto &entrypoints = selection.package->entrypoints;
         auto html = readPackageFile(entrypoints.html);
-        if (!html) { respond(client, "text/plain", "Unavailable", "500 Internal Server Error"); return; }
+        if (!html) { fail(QStringLiteral("package document failed integrity validation")); respond(client, "text/plain", "Unavailable", "500 Internal Server Error"); return; }
+        blog(LOG_INFO, "[WebWidget][Runtime] Initial package document served");
+        const QByteArray root = "/" + capability + "/";
+        const auto script = [&](const QByteArray &name, bool defer = false) {
+            return "<script src=\"" + root + name + "\"" + (defer ? " defer" : "") + "></script>";
+        };
         QByteArray document = "<!doctype html><html><head><meta charset=\"utf-8\">";
+        document += "<base href=\"" + packageUrl(entrypoints.html.left(entrypoints.html.lastIndexOf('/') + 1)) + "\">";
+        document += "<script src=\"" + root + "imported-bootstrap.js\" data-compatibility=\"" +
+            widgetCompatibilityName(selection.compatibility).toUtf8() + "\"></script>";
+        document += script("bridge.js");
+        if (selection.compatibility == WidgetCompatibility::StreamElements) {
+            document += script("streamelements-config.js") + script("streamelements-adapter.js");
+            document += "<script src=\"https://code.jquery.com/jquery-3.7.1.min.js\" defer></script>";
+        }
         if (!entrypoints.css.isEmpty()) document += "<link rel=\"stylesheet\" href=\"" + packageUrl(entrypoints.css) + "\">";
-        document += "<script src=\"bridge.js\" defer></script>";
-        if (selection.compatibility == WidgetCompatibility::StreamElements)
-            document += "<script src=\"streamelements-config.js\" defer></script>"
-                        "<script src=\"https://code.jquery.com/jquery-3.7.1.min.js\" defer></script>";
         document += "</head><body>" + expandFields(std::move(*html));
         if (!entrypoints.javascript.isEmpty()) document += "<script src=\"" + packageUrl(entrypoints.javascript) + "\" defer></script>";
-        if (selection.compatibility == WidgetCompatibility::StreamElements)
-            document += "<script src=\"streamelements-adapter.js\" defer></script>";
         document += "</body></html>";
         respond(client, "text/html; charset=utf-8", document);
     }
-    static void respond(QTcpSocket *client, const QByteArray &type, const QByteArray &body, const QByteArray &code = "200 OK")
+    void respond(QTcpSocket *client, const QByteArray &type, const QByteArray &body, const QByteArray &code = "200 OK")
     {
         QByteArray headers = "HTTP/1.1 " + code + "\r\nContent-Type: " + type + "\r\nContent-Length: " + QByteArray::number(body.size()) +
             "\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n";
-        if (type.startsWith("text/html")) headers += "Content-Security-Policy: default-src 'none'; script-src 'self' https://code.jquery.com; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' https: data:; connect-src 'self' ws://127.0.0.1:* https:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'\r\n";
+        if (type.startsWith("text/html")) {
+            headers += selection.package
+                ? "Content-Security-Policy: default-src 'none'; script-src 'self' https: 'unsafe-inline'; style-src 'self' https: 'unsafe-inline'; font-src 'self' https: data:; img-src 'self' https: data: blob:; connect-src 'self' ws://127.0.0.1:* https:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'\r\n"
+                : "Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; connect-src 'self' ws://127.0.0.1:*; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'\r\n";
+        }
         client->write(headers + "\r\n" + body);
         client->disconnectFromHost();
     }
@@ -277,20 +309,30 @@ public:
                 if (!authenticated) {
                     authenticated = object.value("type") == "hello" && object.value("capability").toString().toLatin1() == capability;
                     if (!authenticated) { socket->close(QWebSocketProtocol::CloseCodePolicyViolated, QStringLiteral("Invalid capability")); return; }
+                    blog(LOG_INFO, "[WebWidget][Runtime] Bridge handshake complete");
                     socket->sendTextMessage(QString::fromUtf8(QJsonDocument(QJsonObject{{"type", "welcome"}, {"schemaVersion", 1}, {"width", int(width)}, {"height", int(height)}}).toJson(QJsonDocument::Compact)));
-                } else if (object.value("type") == "ready") { ready = true; setStatus(QStringLiteral("Web Widget ready")); }
+                } else if (object.value("type") == "ready" && phase == Phase::Starting) {
+                    ready = true; phase = Phase::Running;
+                    setStatus(QStringLiteral("Web Widget ready"));
+                    blog(LOG_INFO, "[WebWidget][Runtime] Document initialized; runtime Ready");
+                } else if (object.value("type") == "failed") {
+                    const auto reason = object.value("reason").toString();
+                    fail(reason == "script-resource" ? QStringLiteral("required script could not load") :
+                         reason == "stylesheet-resource" ? QStringLiteral("required stylesheet could not load") :
+                         QStringLiteral("widget JavaScript initialization failed"));
+                }
                 else if (object.value("type") == "ack" && object.value("deliveryId").toString() == pendingDelivery) { pendingDelivery.clear(); pendingTimer.invalidate(); }
             });
-            QObject::connect(socket, &QWebSocket::disconnected, this, [this, candidate] { if (stopped) return; if (socket == candidate) { socket = nullptr; ready = authenticated = false; pendingDelivery.clear(); setStatus(QStringLiteral("Web Widget disconnected")); } candidate->deleteLater(); });
+            QObject::connect(socket, &QWebSocket::disconnected, this, [this, candidate] { if (stopped) return; if (socket == candidate) { socket = nullptr; ready = authenticated = false; pendingDelivery.clear(); fail(QStringLiteral("browser bridge disconnected")); } candidate->deleteLater(); });
         }
     }
     void pump()
     {
-        if (stopped) return;
+        if (stopped || phase == Phase::Failed) return;
         if (!ready && loadTimer.isValid() && loadTimer.elapsed() > 10000)
-            setStatus(QStringLiteral("Web Widget failed to become ready. Use Refresh Web Widget to retry."));
+            { fail(authenticated ? QStringLiteral("document initialization timed out") : QStringLiteral("browser bridge startup timed out")); return; }
         if (!pendingDelivery.isEmpty() && pendingTimer.isValid() && pendingTimer.elapsed() > 10000 && socket) {
-            setStatus(QStringLiteral("Web Widget stopped acknowledging events. Reconnecting the bridge."));
+            fail(QStringLiteral("event acknowledgement timed out"));
             socket->close(QWebSocketProtocol::CloseCodeGoingAway, QStringLiteral("Event acknowledgement timeout"));
             return;
         }
@@ -326,6 +368,8 @@ public:
     }
 
     std::atomic_bool stopped = false;
+    enum class Phase { Starting, Running, Failed, Stopping, Stopped };
+    Phase phase = Phase::Starting;
     bool cleaned = false;
     mutable std::mutex statusMutex;
     std::shared_ptr<PluginRuntime> runtime;

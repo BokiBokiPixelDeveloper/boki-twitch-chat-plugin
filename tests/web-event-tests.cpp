@@ -158,6 +158,14 @@ private Q_SLOTS:
             "GET /" + capability + "/index.html HTTP/1.1\r\nHost: 127.0.0.1:4567\r\nHost: 127.0.0.1:4567\r\n\r\n", capability, 4567));
         const QByteArray packageRequest = "GET /" + capability + "/package/assets/icon.svg HTTP/1.1\r\nHost: 127.0.0.1:4567\r\n\r\n";
         QCOMPARE(WidgetResourceRequest::packagePath(packageRequest, capability, 4567), std::optional<QString>(QStringLiteral("assets/icon.svg")));
+        const auto resource = [&](const QByteArray &path) {
+            return WidgetResourceRequest::packagePath("GET /" + capability + "/package/" + path +
+                " HTTP/1.1\r\nHost: 127.0.0.1:4567\r\n\r\n", capability, 4567);
+        };
+        QCOMPARE(resource("assets/my%20font.woff2?v=1"), std::optional<QString>(QStringLiteral("assets/my font.woff2")));
+        QCOMPARE(resource("assets/%E2%98%83.png"), std::optional<QString>(QString::fromUtf8("assets/☃.png")));
+        for (const auto &bad : {"%2e%2e/secret", "assets/%00.png", "assets/%FF.png", "assets/%2", "assets/%GG", "assets%5csecret"})
+            QVERIFY(!resource(bad));
         QVERIFY(!WidgetResourceRequest::packagePath(
             "GET /" + capability + "/package/../secret HTTP/1.1\r\nHost: 127.0.0.1:4567\r\n\r\n", capability, 4567));
         QVERIFY(!WidgetResourceRequest::packagePath(

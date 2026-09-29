@@ -104,7 +104,7 @@ bool buttonInstallUpdate(obs_properties_t *, obs_property_t *, void *data)
 bool buttonRefreshWebWidget(obs_properties_t *, obs_property_t *, void *data)
 {
     static_cast<ChatSource *>(data)->refreshWebWidget();
-    return true;
+    return false;
 }
 bool buttonImportWebWidget(obs_properties_t *, obs_property_t *, void *data)
 {
@@ -191,9 +191,12 @@ void ChatSource::update(obs_data_t *settings)
     gifLifetimeSeconds_ = static_cast<float>(obs_data_get_double(settings, S_GIF_LIFETIME));
 
     clientId_ = QString::fromUtf8(obs_data_get_string(settings, S_CLIENT_ID));
+    const bool widgetChannelChanged = channel_ != QString::fromUtf8(obs_data_get_string(settings, S_CHANNEL));
     channel_ = QString::fromUtf8(obs_data_get_string(settings, S_CHANNEL));
     accessToken_ = QString::fromUtf8(obs_data_get_string(settings, S_ACCESS_TOKEN));
     refreshToken_ = QString::fromUtf8(obs_data_get_string(settings, S_REFRESH_TOKEN));
+    const bool widgetSelectionChanged = widgetChannelChanged || widgetPackageId_ != QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_PACKAGE_ID)) ||
+        widgetCompatibility_ != widgetCompatibilityFromName(QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_COMPATIBILITY)));
     widgetArchivePath_ = QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_ARCHIVE_PATH));
     widgetPackageId_ = QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_PACKAGE_ID));
     widgetCompatibility_ = widgetCompatibilityFromName(QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_COMPATIBILITY)));
@@ -236,6 +239,7 @@ void ChatSource::update(obs_data_t *settings)
         if (rendererMode_ == RendererMode::WebWidget)
             createWebRuntime();
     } else if (rendererMode_ == RendererMode::WebWidget) {
+        if (widgetSelectionChanged) { webReloading_ = true; destroyWebRuntime(); }
         if (!webRuntime_) createWebRuntime();
         else webRuntime_->resize(canvasWidth_, canvasHeight_);
     }
@@ -246,11 +250,19 @@ void ChatSource::refreshWebWidget()
     std::lock_guard lock(sourceMutex_);
     if (rendererMode_ != RendererMode::WebWidget) return;
     blog(LOG_INFO, "[WebWidget][Runtime] Refresh requested");
+    webReloading_ = true;
+    widgetStatusUi_.publish(QStringLiteral("Web Widget reloading"));
     destroyWebRuntime();
     blog(LOG_INFO, "[WebWidget][Runtime] Previous runtime stopped");
     createWebRuntime();
     blog(LOG_INFO, "[WebWidget][Runtime] Runtime recreated");
-    if (source_) obs_source_update_properties(source_);
+    // Never rebuild properties from a button callback: OBS still owns its WidgetInfo.
+}
+
+QString ChatSource::webWidgetStatus() const
+{
+    const auto status = webRuntime_ ? webRuntime_->status() : QStringLiteral("Web Widget unavailable");
+    return webReloading_ && status == QStringLiteral("Web Widget loading") ? QStringLiteral("Web Widget reloading") : status;
 }
 
 void ChatSource::createWebRuntime()
@@ -284,14 +296,10 @@ void ChatSource::importWidgetPackage()
     }
 
     obs_source_t *source = nullptr;
-    bool refresh = false;
     const QString packageId = package->id;
     {
         std::lock_guard lock(sourceMutex_);
-        selectedWidgetPackage_ = package;
-        widgetPackageId_ = packageId;
         source = source_ ? obs_source_get_ref(source_) : nullptr;
-        refresh = rendererMode_ == RendererMode::WebWidget;
     }
     if (source) {
         obs_data_t *settings = obs_source_get_settings(source);
@@ -301,7 +309,7 @@ void ChatSource::importWidgetPackage()
         obs_source_release(source);
     }
     blog(LOG_INFO, "[WebWidget][Import] Installed package %s", packageId.toUtf8().constData());
-    if (refresh) refreshWebWidget();
+    // The source update applies the selection and replaces the runtime once.
 }
 
 void ChatSource::destroyWebRuntime()
@@ -574,6 +582,7 @@ void ChatSource::consumePending()
 void ChatSource::tick(float seconds)
 {
     std::lock_guard lock(sourceMutex_);
+    if (webRuntime_) widgetStatusUi_.publish(webWidgetStatus());
     if (rendererMode_ == RendererMode::WebWidget) return;
     consumePending();
 
@@ -762,7 +771,8 @@ obs_properties_t *ChatSource::properties()
                 widgetCompatibilityName(selectedWidgetPackage_->detectedCompatibility)).toUtf8();
             obs_properties_add_text(props, "web_package_info", packageInfo.constData(), OBS_TEXT_INFO);
         }
-        const QByteArray webStatus = (webRuntime_ ? webRuntime_->status() : QStringLiteral("Web Widget unavailable")).toUtf8();
+        widgetStatusUi_.publish(webWidgetStatus());
+        const QByteArray webStatus = widgetStatusUi_.html().toUtf8();
         obs_properties_add_text(props, "web_status_info", webStatus.constData(), OBS_TEXT_INFO);
         obs_properties_add_button2(props, "web_refresh", "Reload Widget", buttonRefreshWebWidget, this);
     }

@@ -114,6 +114,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/plugin-main.cpp
     src/renderer/chat-source.cpp
     src/web/web-widget-runtime.cpp
+    src/web/widget-status-ui.cpp
     src/updater/update-checker.cpp
     src/updater/update-ui.cpp
     ${CHAT_EMOJI_RESOURCE}
