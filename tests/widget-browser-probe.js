@@ -55,6 +55,35 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     } else if (process.argv[3] === 'development') {
       if (state.rows < 1 || state.loads) throw new Error('Development widget did not render');
     } else if (state.loads !== 1 || state.rows < 1 || state.jquery !== 'function') throw new Error('Scrapbook did not initialize and render a synthetic message');
+    if (!process.argv[3]) {
+      // Exercise asynchronous additions as well as real runtime messages. Images
+      // and row animations must not leave the viewport stranded on old content.
+      await call('Runtime.evaluate', {expression: `(() => {
+        const container = document.querySelector('.main-container');
+        for (let i = 0; i < 75; ++i) {
+          const row = document.createElement('div'); row.className = i % 2 ? 'alert-row' : 'message-row';
+          row.textContent = 'History stress ' + i; row.style.height = '120px'; container.appendChild(row);
+        }
+      })()`});
+      await delay(500);
+      await call('Runtime.evaluate', {expression: `(() => {
+        const row = [...document.querySelector('.main-container').children].find(r => r.textContent === 'History stress 74');
+        if (!row) throw new Error('Newest stress row was discarded');
+        row.style.height = '420px';
+      })()`});
+      await delay(200);
+      const layout = JSON.parse((await call('Runtime.evaluate', {expression: `JSON.stringify((() => {
+        const c = document.querySelector('.main-container');
+        return {rows:c.querySelectorAll(':scope > .message-row,:scope > .alert-row').length,
+          height:c.getBoundingClientRect().height, bottom:c.scrollHeight-c.clientHeight-c.scrollTop,
+          limit:window.BokiStreamElementsConfig.chatLayout.maxMessages,
+          maxHeight:Math.min(innerHeight,window.BokiStreamElementsConfig.chatLayout.maxHeight)};
+      })())`, returnByValue:true})).result.value);
+      if (layout.rows > layout.limit || layout.height > layout.maxHeight + 1 || Math.abs(layout.bottom) > 2)
+        throw new Error('Chat limits or bottom following failed: ' + JSON.stringify(layout));
+      console.log(JSON.stringify({chatLayout:layout}));
+    }
+
   } finally {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({id:2147483647, method:'Browser.close'}));
     else browser.kill('SIGTERM');

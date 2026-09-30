@@ -244,7 +244,7 @@ private Q_SLOTS:
         QTRY_VERIFY(runtime->status().contains("failed"));
         QVERIFY(runtime->status().contains("script"));
         runtime.reset();
-        runtime = create({package, WidgetCompatibility::StreamElements, QStringLiteral("channel"), QStringLiteral("browser-reload")});
+        runtime = create({package, WidgetCompatibility::StreamElements, QStringLiteral("channel"), QStringLiteral("browser-reload"), 7, 240});
         QProcess browser;
         browser.start("node", {QStringLiteral(BROWSER_PROBE), browserUrl});
         QVERIFY(browser.waitForStarted());

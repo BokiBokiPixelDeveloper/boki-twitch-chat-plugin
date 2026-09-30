@@ -3,7 +3,46 @@
 
   const config = Object.freeze(window.BokiStreamElementsConfig || {});
   const log = (message) => console.warn(`[StreamElements][Package:${config.packageId || 'builtin'}][Instance:${config.instanceId || 'unknown'}] ${message}`);
-  const fields = Object.freeze({...config.fieldData});
+  const maxMessages = Math.max(1, Math.min(200, Number(config.chatLayout?.maxMessages) || 20));
+  const maxHeight = Math.max(64, Math.min(4320, Number(config.chatLayout?.maxHeight) || 600));
+  const fieldValues = {...config.fieldData};
+  // These are Scrapbook's existing field names. Keep the imported files intact.
+  if ('alignMessages' in fieldValues) fieldValues.alignMessages = 'bottom';
+  if ('msgLimit' in fieldValues) fieldValues.msgLimit = false;
+  const fields = Object.freeze(fieldValues);
+  let maintainLayout = () => {};
+  const installChatLayout = () => {
+    const container = document.querySelector('.main-container');
+    if (!container) return;
+    const style = document.createElement('style');
+    style.textContent = `html, body {height:100%; margin:0; overflow:hidden;}
+      .main-container {box-sizing:border-box!important; height:min(${maxHeight}px, 100vh)!important;
+        max-height:100vh!important; overflow-x:hidden!important; overflow-y:auto!important;
+        display:flex!important; flex-direction:column!important; justify-content:flex-start!important;
+        scrollbar-width:none; overflow-anchor:none;}
+      .main-container::-webkit-scrollbar {display:none;}
+      .main-container > .message-row, .main-container > .alert-row {flex-shrink:0!important;}
+      .main-container > :first-child {margin-top:auto!important;}`;
+    document.head.appendChild(style);
+    const observed = new Set();
+    const resize = new ResizeObserver(() => maintainLayout());
+    maintainLayout = () => {
+      const rows = [...container.children].filter(row => row.matches('.message-row,.alert-row'));
+      for (const row of rows.slice(0, Math.max(0, rows.length - maxMessages))) row.remove();
+      for (const row of observed) {
+        if (!row.isConnected) { resize.unobserve(row); observed.delete(row); }
+      }
+      for (const row of rows) {
+        if (row.isConnected && !observed.has(row)) { observed.add(row); resize.observe(row); }
+      }
+      container.scrollTop = container.scrollHeight;
+    };
+    new MutationObserver(maintainLayout).observe(container, {childList:true, subtree:true, characterData:true});
+    resize.observe(container);
+    container.addEventListener('load', maintainLayout, true);
+    document.fonts?.ready.then(maintainLayout);
+    maintainLayout();
+  };
   const visibleMessages = new Map();
   // StreamElements widgets commonly interpolate identity and alert strings into
   // HTML templates. Keep the core DTO semantic and encode only those adapter
@@ -60,6 +99,11 @@
       const mapped = message(data, generic.header || {});
       visibleMessages.set(mapped.msgId, mapped.userId);
       event('message', {data: mapped});
+      while (visibleMessages.size > maxMessages) {
+        const oldest = visibleMessages.keys().next().value;
+        visibleMessages.delete(oldest);
+        event('delete-message', {msgId: oldest});
+      }
       break;
     }
     case 'MessageDeleted': {
@@ -85,6 +129,7 @@
     case 'Raid': event('raid-latest', {name: displayName(data.from), amount: data.viewers, viewers: data.viewers}); break;
     default: log(`Unsupported generic event: ${generic.type}`);
     }
+    maintainLayout();
   };
   const unsupported = path => (...args) => {
     log(`Unsupported API call: SE_API.${path}`);
@@ -110,6 +155,7 @@
     log('onWidgetLoad dispatch started');
     window.dispatchEvent(new CustomEvent('onWidgetLoad', {detail: {fieldData: fields, channel: {username: config.channel?.username || ''},
       currency: {symbol: config.currency?.symbol || ''}, session: {data: {}}, recents: []}}));
+    installChatLayout();
     log('onWidgetLoad dispatched');
     window.BokiWidgetLifecycle?.complete();
   });

@@ -103,6 +103,8 @@ private:
     QString refreshToken_;
     QString widgetArchivePath_;
     QString widgetPackageId_;
+    int maxChatMessages_ = 20;
+    int maxChatHeight_ = 600;
     WidgetCompatibility widgetCompatibility_ = WidgetCompatibility::Auto;
     bool widgetTrustAcknowledged_ = false;
     bool eventTestEnabled_ = false;

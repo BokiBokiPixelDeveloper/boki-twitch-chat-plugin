@@ -45,7 +45,9 @@ private:
     void failAuthentication(QString status);
     void finish(QNetworkReply *reply, ReplyCallback callback);
     void validateToken();
+    void retryAuthentication(bool refresh, int status);
     void refreshAccessToken();
+    void recoverUnauthorizedRequest();
     void finishAuth(const QJsonObject &json);
     void pollDeviceToken();
     void resolveBroadcaster();
@@ -67,7 +69,7 @@ private:
     TokenCallback tokens_;
     OrderedEventPipeline pipeline_;
     std::unique_ptr<EventSubSocket> socket_, replacement_;
-    QTimer devicePollTimer_, reconnectTimer_, watchdog_, validationTimer_, handoffTimer_;
+    QTimer devicePollTimer_, reconnectTimer_, watchdog_, validationTimer_, handoffTimer_, authRetryTimer_;
     QSet<QNetworkReply *> replies_;
     TwitchConfiguration configuration_;
     EventSubConnectionSettings connectionSettings_;
@@ -84,8 +86,11 @@ private:
     bool deviceRequestPending_ = false;
     bool refreshing_ = false;
     bool refreshAttempted_ = false;
+    bool apiRefreshAttempted_ = false;
+    bool apiUnauthorizedPending_ = false;
     QDeadlineTimer deviceDeadline_;
     int pollIntervalMs_ = 5000;
+    int authRetryMs_ = 1000;
     int retryMs_ = 1000;
     int keepaliveMs_ = 11000;
 };

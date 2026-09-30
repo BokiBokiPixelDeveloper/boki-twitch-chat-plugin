@@ -96,6 +96,8 @@ static void sourceDefaults(obs_data_t *settings)
     obs_data_set_default_int(settings, "event_test_resub_months", 6);
     obs_data_set_default_string(settings, "renderer_mode", "native");
     obs_data_set_default_string(settings, "web_widget_compatibility", "auto");
+    obs_data_set_default_int(settings, "web_chat_max_messages", 20);
+    obs_data_set_default_int(settings, "web_chat_max_height", 600);
 }
 
 static obs_source_info sourceInfo = {};
