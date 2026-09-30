@@ -68,6 +68,7 @@ public:
     QList<QByteArray> forms;
     int validations = 0, lookups = 0, deviceRequests = 0, tokenRequests = 0;
     int imageDelay = 0, catalogDelay = 0, followFailures = 0, followStatus = 403;
+    QList<int> validationStatuses, tokenStatuses, validationExpiries;
     int invalidValidations = 0;
     bool allInvalid = false;
     QString userId = QStringLiteral("100");
@@ -112,6 +113,12 @@ protected:
             QImage image(24, 16, QImage::Format_RGBA8888); image.fill(Qt::green);
             QBuffer buffer(&response.bytes); buffer.open(QIODevice::WriteOnly); image.save(&buffer, "PNG");
         }
+        if (path == QStringLiteral("/oauth2/validate") && !validationExpiries.empty()) {
+            auto body = QJsonDocument::fromJson(response.bytes).object();
+            body["expires_in"] = validationExpiries.takeFirst(); response.bytes = json(body);
+        }
+        if (path == QStringLiteral("/oauth2/validate") && !validationStatuses.empty()) response.status = validationStatuses.takeFirst();
+        if (path == QStringLiteral("/oauth2/token") && !tokenStatuses.empty()) response.status = tokenStatuses.takeFirst();
         return new FakeReply(request, std::move(response), this);
     }
 };
@@ -460,6 +467,59 @@ void TwitchProducerTests::refreshBoundedAndFormEncoding()
     QTRY_COMPARE(h.network.validations, 2); QTRY_VERIFY(client.status().contains(QStringLiteral("expired")));
     QCOMPARE(h.network.tokenRequests, 1); QVERIFY(h.sockets.empty());
     QVERIFY(h.network.forms.front().contains("synthetic%2Brefresh%26token"));
+}
+
+void TwitchProducerTests::temporaryAuthenticationRecovers()
+{
+    Harness h; EventDispatcher dispatcher;
+    h.network.validationStatuses = {503, 401, 200};
+    h.network.tokenStatuses = {503, 200};
+    TwitchClient client(dispatcher, {}, [&h](const TwitchTokens &tokens) { h.tokens.push_back(tokens); }, h.dependencies());
+    client.configure(configuration()); client.startOrResume();
+    QTRY_COMPARE_WITH_TIMEOUT(h.sockets.size(), 1, 6000);
+    QCOMPARE(h.network.validations, 3); QCOMPARE(h.network.tokenRequests, 2);
+    QCOMPARE(h.tokens.size(), 1); QCOMPARE(h.tokens.front().refreshToken, QStringLiteral("synthetic-new-refresh"));
+    QCOMPARE(h.browsers, 0); QCOMPARE(h.network.deviceRequests, 0);
+}
+
+void TwitchProducerTests::unauthorizedSubscriptionRenewsSession()
+{
+    Harness h; EventDispatcher dispatcher;
+    h.network.followFailures = 1; h.network.followStatus = 401;
+    TwitchClient client(dispatcher, {}, {}, h.dependencies());
+    client.configure(configuration()); client.startOrResume();
+    QTRY_COMPARE(h.sockets.size(), 1); h.sockets.back()->deliver(welcome());
+    QTRY_COMPARE(h.sockets.size(), 2); QCOMPARE(h.network.tokenRequests, 1);
+    h.sockets.back()->deliver(welcome(QStringLiteral("renewed")));
+    QTRY_COMPARE(client.subscriptions().value(QStringLiteral("channel.follow")), TwitchSubscriptionState::Enabled);
+    QVERIFY(client.status().contains(QStringLiteral("active"))); QCOMPARE(h.browsers, 0);
+}
+
+void TwitchProducerTests::expiryTriggersAutomaticRenewal()
+{
+    Harness h; EventDispatcher dispatcher;
+    h.network.validationStatuses = {200, 401, 200};
+    h.network.validationExpiries = {0, 3600, 3600};
+    TwitchClient client(dispatcher, {}, {}, h.dependencies());
+    client.configure(configuration()); client.startOrResume();
+    QTRY_COMPARE(h.sockets.size(), 1); h.sockets.back()->deliver(welcome());
+    QTRY_COMPARE_WITH_TIMEOUT(h.sockets.size(), 2, 4000);
+    QCOMPARE(h.network.validations, 3); QCOMPARE(h.network.tokenRequests, 1);
+    QCOMPARE(h.network.deviceRequests, 0); QCOMPARE(h.browsers, 0);
+}
+
+void TwitchProducerTests::authenticationRetryStopsAndRejectsInvalidRefresh()
+{
+    Harness h; EventDispatcher dispatcher;
+    h.network.validationStatuses = {503};
+    TwitchClient client(dispatcher, {}, {}, h.dependencies());
+    client.configure(configuration()); client.startOrResume();
+    QTRY_VERIFY(client.status().contains(QStringLiteral("retrying automatically")));
+    client.stop(); QTest::qWait(1200); QCOMPARE(h.network.validations, 1);
+    h.network.validationStatuses = {401}; h.network.tokenStatuses = {400};
+    client.startOrResume();
+    QTRY_VERIFY(client.status().contains(QStringLiteral("could not be renewed")));
+    QTest::qWait(1200); QCOMPARE(h.network.tokenRequests, 1); QVERIFY(h.sockets.empty());
 }
 
 void TwitchProducerTests::nativeAdapterModerationAndLifetime()

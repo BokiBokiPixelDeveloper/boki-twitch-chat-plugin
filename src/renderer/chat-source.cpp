@@ -47,6 +47,8 @@ constexpr const char *S_TEST_GIFT_COUNT = "event_test_gift_count";
 constexpr const char *S_TEST_RESUB_MONTHS = "event_test_resub_months";
 constexpr const char *S_WIDGET_ARCHIVE_PATH = "web_widget_zip_path";
 constexpr const char *S_WIDGET_PACKAGE_ID = "web_widget_package_id";
+constexpr const char *S_CHAT_MESSAGES = "web_chat_max_messages";
+constexpr const char *S_CHAT_HEIGHT = "web_chat_max_height";
 constexpr const char *S_WIDGET_COMPATIBILITY = "web_widget_compatibility";
 constexpr const char *S_WIDGET_TRUST = "web_widget_trust_acknowledged";
 
@@ -195,8 +197,12 @@ void ChatSource::update(obs_data_t *settings)
     channel_ = QString::fromUtf8(obs_data_get_string(settings, S_CHANNEL));
     accessToken_ = QString::fromUtf8(obs_data_get_string(settings, S_ACCESS_TOKEN));
     refreshToken_ = QString::fromUtf8(obs_data_get_string(settings, S_REFRESH_TOKEN));
-    const bool widgetSelectionChanged = widgetChannelChanged || widgetPackageId_ != QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_PACKAGE_ID)) ||
+    const int maxChatMessages = std::clamp(static_cast<int>(obs_data_get_int(settings, S_CHAT_MESSAGES)), 1, 200);
+    const int maxChatHeight = std::clamp(static_cast<int>(obs_data_get_int(settings, S_CHAT_HEIGHT)), 64, 4320);
+    const bool widgetSelectionChanged = maxChatMessages_ != maxChatMessages || maxChatHeight_ != maxChatHeight || widgetChannelChanged || widgetPackageId_ != QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_PACKAGE_ID)) ||
         widgetCompatibility_ != widgetCompatibilityFromName(QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_COMPATIBILITY)));
+    maxChatMessages_ = maxChatMessages;
+    maxChatHeight_ = maxChatHeight;
     widgetArchivePath_ = QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_ARCHIVE_PATH));
     widgetPackageId_ = QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_PACKAGE_ID));
     widgetCompatibility_ = widgetCompatibilityFromName(QString::fromUtf8(obs_data_get_string(settings, S_WIDGET_COMPATIBILITY)));
@@ -270,7 +276,7 @@ void ChatSource::createWebRuntime()
     const auto selected = widgetCompatibility_ == WidgetCompatibility::Auto && selectedWidgetPackage_
         ? selectedWidgetPackage_->detectedCompatibility : widgetCompatibility_;
     webRuntime_ = std::make_unique<WebWidgetRuntime>(source_, runtime_, backendAccepted_, canvasWidth_, canvasHeight_,
-        WebWidgetRuntime::WidgetSelection{selectedWidgetPackage_, selected, channel_, QUuid::createUuid().toString(QUuid::WithoutBraces)});
+        WebWidgetRuntime::WidgetSelection{selectedWidgetPackage_, selected, channel_, QUuid::createUuid().toString(QUuid::WithoutBraces), maxChatMessages_, maxChatHeight_});
 }
 
 void ChatSource::importWidgetPackage()
@@ -765,6 +771,9 @@ obs_properties_t *ChatSource::properties()
         obs_property_list_add_string(compatibility, "Auto", "auto");
         obs_property_list_add_string(compatibility, "Generic Web Widget", "generic");
         obs_property_list_add_string(compatibility, "StreamElements", "streamelements");
+        obs_properties_add_int(props, S_CHAT_MESSAGES, "StreamElements chat: Maximum messages", 1, 200, 1);
+        obs_properties_add_int(props, S_CHAT_HEIGHT, "StreamElements chat: Maximum height (px)", 64, 4320, 1);
+        obs_properties_add_text(props, "web_chat_limits_info", "Bottom-following layout and row limits apply to compatible chat widgets (including Scrapbook). Height is also bounded by the canvas.", OBS_TEXT_INFO);
         obs_properties_add_button2(props, "web_import_widget", "Import Widget ZIP", buttonImportWebWidget, this);
         if (selectedWidgetPackage_) {
             const QByteArray packageInfo = QStringLiteral("Selected: %1 — %2 detected").arg(selectedWidgetPackage_->displayName,

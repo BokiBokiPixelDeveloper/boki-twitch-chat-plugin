@@ -10,7 +10,7 @@ function adapter() {
   class CustomEvent { constructor(type, init) { this.type = type; this.detail = init.detail; } }
   const context = {window: {BokiStreamElementsConfig: {packageId: 'package', instanceId: 'instance', fieldData: {badgesDisplay: true}, channel: {username: 'channel'}, currency: {symbol: ''}},
     addEventListener(type, callback) { listeners.set(type, callback); }, dispatchEvent(value) { dispatched.push(value); return true; }},
-    CustomEvent, BokiChat: {ready: Promise.resolve(), onEvent(callback) { eventListener = callback; }}, console: {warn(value) { warnings.push(value); }}, Promise, Object, String, Number, Boolean, Date, Array, Proxy};
+    document: {querySelector() { return null; }}, CustomEvent, BokiChat: {ready: Promise.resolve(), onEvent(callback) { eventListener = callback; }}, console: {warn(value) { warnings.push(value); }}, Promise, Object, String, Number, Boolean, Date, Array, Proxy};
   vm.runInNewContext(source, context, {filename: 'streamelements-adapter.js'});
   return Promise.resolve().then(() => Promise.resolve()).then(() => ({context, dispatched, warnings, emit: value => eventListener(value)}));
 }
@@ -126,4 +126,15 @@ test('initialization errors remain failed even after late completion', async () 
   widget.events.get('unhandledrejection')({reason:'sensitive exception that must not be forwarded'});
   widget.finish();
   await assert.rejects(widget.lifecycle.ready, reason => reason === 'javascript');
+});
+
+test('history evicts oldest messages and moderation tracks only bounded history', async () => {
+  const widget = await adapter();
+  for (let i = 0; i < 75; ++i) widget.emit({type:'ChatMessage', header, data:{messageId:`id-${i}`, user, text:'hello'}});
+  const deleted = () => widget.dispatched.filter(e => e.detail.listener === 'delete-message');
+  assert.equal(deleted().length, 55);
+  assert.equal(deleted()[0].detail.event.msgId, 'message-id-0');
+  widget.emit({type:'ChatCleared', data:{}});
+  assert.equal(deleted().length, 75);
+  assert.equal(deleted().at(-1).detail.event.msgId, 'message-id-74');
 });

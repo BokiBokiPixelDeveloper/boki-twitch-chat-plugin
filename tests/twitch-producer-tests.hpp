@@ -17,6 +17,10 @@ private Q_SLOTS:
     void attachmentEventDeliveryCanSwitchModes();
     void runtimeTokensAndQueuedDetach();
     void refreshBoundedAndFormEncoding();
+    void temporaryAuthenticationRecovers();
+    void unauthorizedSubscriptionRenewsSession();
+    void expiryTriggersAutomaticRenewal();
+    void authenticationRetryStopsAndRejectsInvalidRefresh();
     void nativeAdapterModerationAndLifetime();
     void shutdownFromAnotherThread();
     void enrichmentPressureAndDeadline();

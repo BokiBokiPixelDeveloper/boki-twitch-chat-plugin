@@ -246,6 +246,7 @@ public:
         if (!selection.package) { respond(client, "text/plain", "Not found", "404 Not Found"); return; }
         const QJsonObject fields = resolvedFields();
         const QJsonObject value{{"packageId", selection.package->id}, {"instanceId", selection.instanceId},
+            {"chatLayout", QJsonObject{{"maxMessages", selection.maxChatMessages}, {"maxHeight", selection.maxChatHeight}}},
             {"fieldData", fields}, {"channel", QJsonObject{{"username", selection.channel}}}, {"currency", QJsonObject{{"symbol", ""}}}};
         respond(client, "text/javascript; charset=utf-8", QByteArray("window.BokiStreamElementsConfig=") + QJsonDocument(value).toJson(QJsonDocument::Compact) + ";");
     }

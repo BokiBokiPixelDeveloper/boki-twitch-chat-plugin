@@ -18,6 +18,8 @@ public:
         WidgetCompatibility compatibility = WidgetCompatibility::GenericWebWidget;
         QString channel;
         QString instanceId;
+        int maxChatMessages = 20;
+        int maxChatHeight = 600;
     };
     WebWidgetRuntime(obs_source_t *parent, std::shared_ptr<PluginRuntime> runtime,
                      std::shared_ptr<std::atomic_bool> backendAccepted, uint32_t width, uint32_t height);

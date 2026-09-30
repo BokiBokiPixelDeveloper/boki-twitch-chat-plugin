@@ -26,6 +26,7 @@ TwitchClient::TwitchClient(EventDispatcher &dispatcher, LogCallback log, TokenCa
     QObject::connect(&watchdog_, &QTimer::timeout, this, [this] { scheduleReconnect(); });
     handoffTimer_.setSingleShot(true);
     QObject::connect(&handoffTimer_, &QTimer::timeout, this, [this] { scheduleReconnect(); });
+    authRetryTimer_.setSingleShot(true);
     validationTimer_.setInterval(45 * 60 * 1000);
     QObject::connect(&validationTimer_, &QTimer::timeout, this, [this] {
         if (running_ && !authenticating_) { authenticating_ = true; refreshAttempted_ = false; validateToken(); }
@@ -78,7 +79,9 @@ void TwitchClient::stop()
     ++generation_;
     authenticating_ = deviceRequestPending_ = refreshing_ = refreshAttempted_ = false;
     devicePollTimer_.stop(); reconnectTimer_.stop(); watchdog_.stop();
-    validationTimer_.stop(); handoffTimer_.stop();
+    validationTimer_.stop(); handoffTimer_.stop(); authRetryTimer_.stop();
+    authRetryMs_ = 1000;
+    apiRefreshAttempted_ = apiUnauthorizedPending_ = false;
     const auto replies = std::exchange(replies_, {});
     for (auto *reply : replies) {
         QObject::disconnect(reply, nullptr, this, nullptr);
@@ -151,6 +154,9 @@ void TwitchClient::startOrResume()
         return;
     }
     if (configuration_.clientId.isEmpty()) { setStatus(QStringLiteral("Client ID is missing")); return; }
+    if (configuration_.accessToken.isEmpty() && !configuration_.refreshToken.isEmpty()) {
+        running_ = authenticating_ = true; refreshAccessToken(); return;
+    }
     if (configuration_.accessToken.isEmpty()) { setStatus(QStringLiteral("Not authenticated - click Connect to Twitch")); return; }
     running_ = authenticating_ = true;
     setStatus(QStringLiteral("Validating Twitch login"));
@@ -217,6 +223,7 @@ void TwitchClient::finishAuth(const QJsonObject &json)
 {
     const auto access = json.value(QStringLiteral("access_token")).toString();
     if (access.isEmpty()) { authenticating_ = false; setStatus(QStringLiteral("Twitch returned no access token")); return; }
+    apiUnauthorizedPending_ = false;
     configuration_.accessToken = access;
     const auto refresh = json.value(QStringLiteral("refresh_token")).toString();
     if (!refresh.isEmpty()) configuration_.refreshToken = refresh;
@@ -225,12 +232,28 @@ void TwitchClient::finishAuth(const QJsonObject &json)
     validateToken();
 }
 
+void TwitchClient::retryAuthentication(bool refresh, int status)
+{
+    authenticating_ = true;
+    validationTimer_.stop();
+    setStatus(QStringLiteral("Twitch authentication temporarily unavailable (HTTP %1) - retrying automatically").arg(status));
+    QObject::disconnect(&authRetryTimer_, nullptr, this, nullptr);
+    QObject::connect(&authRetryTimer_, &QTimer::timeout, this, [this, refresh] {
+        if (!running_) return;
+        if (refresh) { refreshAttempted_ = false; refreshAccessToken(); }
+        else validateToken();
+    });
+    authRetryTimer_.start(authRetryMs_);
+    authRetryMs_ = std::min(authRetryMs_ * 2, 60000);
+}
+
 void TwitchClient::validateToken()
 {
     QNetworkRequest request(QUrl(QStringLiteral("https://id.twitch.tv/oauth2/validate")));
     request.setTransferTimeout(10000);
     request.setRawHeader("Authorization", QByteArray("OAuth ") + configuration_.accessToken.toUtf8());
     finish(transport_->get(request), [this](int status, const QJsonObject &json) {
+        if (status == 0 || status == 408 || status == 429 || status >= 500) { retryAuthentication(false, status); return; }
         if (status == 401) { refreshAccessToken(); return; }
         authenticating_ = false;
         if (status != 200) { failAuthentication(QStringLiteral("Twitch token validation failed - reconnect")); return; }
@@ -243,9 +266,16 @@ void TwitchClient::validateToken()
         userId_ = id; userLogin_ = json.value(QStringLiteral("login")).toString();
         scopes_.clear();
         for (const auto &scope : json.value(QStringLiteral("scopes")).toArray()) scopes_.insert(scope.toString());
-        validationTimer_.start();
+        authRetryMs_ = 1000;
+        authRetryTimer_.stop();
+        if (std::exchange(apiUnauthorizedPending_, false)) { recoverUnauthorizedRequest(); return; }
+        // Validate at least hourly and shortly after the reported expiry, then
+        // refresh reactively on 401. Twitch remains the authority on validity.
+        const int expires = json.value(QStringLiteral("expires_in")).toInt(45 * 60);
+        validationTimer_.start((std::clamp(expires, 0, 45 * 60 - 1) + 1) * 1000);
         if (configuration_.channel.isEmpty()) configuration_.channel = userLogin_;
         if (!socket_) resolveBroadcaster();
+        else updateConnectionStatus();
     });
 }
 
@@ -260,11 +290,30 @@ void TwitchClient::refreshAccessToken()
         {QStringLiteral("client_id"), configuration_.clientId}, {QStringLiteral("refresh_token"), configuration_.refreshToken},
         {QStringLiteral("grant_type"), QStringLiteral("refresh_token")}}), [this](int status, const QJsonObject &json) {
         refreshing_ = false;
+        if (status == 0 || status == 408 || status == 429 || status >= 500) { retryAuthentication(true, status); return; }
         if (status < 200 || status >= 300) {
-            failAuthentication(QStringLiteral("Twitch token refresh failed - reconnect")); return;
+            failAuthentication(QStringLiteral("Twitch authorization could not be renewed (HTTP %1) - reconnect").arg(status)); return;
         }
+        reconnectTimer_.stop(); watchdog_.stop(); handoffTimer_.stop();
+        closeSockets();
         finishAuth(json);
     });
+}
+
+void TwitchClient::recoverUnauthorizedRequest()
+{
+    if (authenticating_) {
+        if (!refreshing_) apiUnauthorizedPending_ = true;
+        return;
+    }
+    if (apiRefreshAttempted_ || isLocalTestMode()) {
+        failAuthentication(QStringLiteral("Twitch rejected renewed authorization - reconnect"));
+        return;
+    }
+    apiRefreshAttempted_ = true;
+    authenticating_ = true;
+    refreshAttempted_ = false;
+    refreshAccessToken();
 }
 
 void TwitchClient::resolveBroadcaster()
@@ -272,6 +321,8 @@ void TwitchClient::resolveBroadcaster()
     QUrl url(QStringLiteral("https://api.twitch.tv/helix/users"));
     QUrlQuery query; query.addQueryItem(QStringLiteral("login"), configuration_.channel); url.setQuery(query);
     finish(transport_->get(apiRequest(url)), [this](int status, const QJsonObject &json) {
+        if (status == 401) { recoverUnauthorizedRequest(); return; }
+        if (status == 0 || status == 408 || status == 429 || status >= 500) { retryAuthentication(false, status); return; }
         const auto data = json.value(QStringLiteral("data")).toArray();
         if (status != 200 || data.isEmpty()) { setStatus(QStringLiteral("Twitch channel lookup failed")); return; }
         broadcasterId_ = data.first().toObject().value(QStringLiteral("id")).toString();
@@ -425,6 +476,10 @@ void TwitchClient::subscribeOne(QString type, QString version, QJsonObject condi
         QJsonDocument(body).toJson(QJsonDocument::Compact)),
         [this, type, version, condition, attempt, sessionGeneration, generation](int status, const QJsonObject &) {
         if (sessionGeneration != sessionGeneration_) return;
+        if (status == 401) {
+            recoverUnauthorizedRequest();
+            return;
+        }
         if (status == 202) subscriptions_[type] = TwitchSubscriptionState::Enabled;
         else if ((status == 0 || status == 429 || status >= 500) && attempt < 3) {
             QTimer::singleShot(1000 * (1 << attempt), this, [this, type, version, condition, attempt, sessionGeneration, generation] {
@@ -438,12 +493,16 @@ void TwitchClient::subscribeOne(QString type, QString version, QJsonObject condi
 
 void TwitchClient::updateConnectionStatus()
 {
+    if (authenticating_) return;
     QStringList unavailable;
+    bool pending = false;
     int enabled = 0;
     for (auto it = subscriptions_.cbegin(); it != subscriptions_.cend(); ++it) {
         if (it.value() == TwitchSubscriptionState::Enabled) ++enabled;
         else if (it.value() != TwitchSubscriptionState::Pending) unavailable.push_back(it.key());
+        else pending = true;
     }
+    if (enabled && !pending) apiRefreshAttempted_ = false;
     unavailable.sort();
     QString status = QStringLiteral("EventSub: %1 subscriptions active").arg(enabled);
     if (!unavailable.isEmpty()) status += QStringLiteral("; unavailable (check authorization): ") + unavailable.join(QStringLiteral(", "));
